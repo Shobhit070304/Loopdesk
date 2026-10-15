@@ -117,6 +117,8 @@ Frontend will be available at: **http://localhost:3000**
 | `GEMINI_API_KEY` | Google Gemini API key | `AIza...` |
 | `DB_URL` | PostgreSQL connection string | `postgresql://admin:password@localhost:5433/rag_db` |
 | `REDIS_URL` | Redis connection URL | `redis://localhost:6379` |
+| `EMBEDDING_MODEL` | Gemini embedding model | `gemini-embedding-001` |
+| `LLM_MODEL` | Gemini generative model | `gemini-2.5-flash` |
 
 See [`api/.env.example`](./api/.env.example) for the full template.
 
@@ -140,6 +142,11 @@ See [`frontend/.env.example`](./frontend/.env.example) for the full template.
 | `DELETE` | `/documents/{id}` | Delete a document chunk by ID |
 | `POST` | `/retrieve` | Hybrid search — returns ranked chunks |
 | `POST` | `/ask` | Full RAG pipeline — returns an LLM answer |
+| `POST` | `/workflows` | Create a decision automation workflow |
+| `GET` | `/workflows` | List all workflows with execution metrics |
+| `DELETE` | `/workflows/{id}` | Delete a workflow |
+| `POST` | `/workflows/{id}/trigger` | Trigger a workflow on an incoming event |
+| `GET` | `/workflows/{id}/executions` | Get execution audit logs for a workflow |
 
 ### `POST /ingest`
 ```json

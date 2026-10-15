@@ -1,18 +1,19 @@
 # pyrefly: ignore [missing-import]
-from pydantic import Field
+from pydantic import Field, BaseModel
 # pyrefly: ignore [missing-import]
 from fastapi import FastAPI, HTTPException
 # pyrefly: ignore [missing-import]
 from fastapi.middleware.cors import CORSMiddleware
 import os
+import json
+from typing import Any, Dict, Optional
+import httpx
 # pyrefly: ignore [missing-import]
 import asyncpg
 import hashlib
 # pyrefly: ignore [missing-import]
 from dotenv import load_dotenv
 from contextlib import asynccontextmanager
-# pyrefly: ignore [missing-import]
-from pydantic import BaseModel
 # pyrefly: ignore [missing-import]
 from google import genai
 # pyrefly: ignore [missing-import]
@@ -25,6 +26,8 @@ load_dotenv()
 DB_URL = os.getenv("DB_URL")
 REDIS_URL = os.getenv("REDIS_URL")
 CORS_ORIGINS = [os.getenv("CORS_ORIGINS", "http://localhost:3000")]
+EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "gemini-embedding-001")
+LLM_MODEL = os.getenv("LLM_MODEL", "gemini-2.5-flash")
 
 @asynccontextmanager
 async def lifeSpan(app:FastAPI):
@@ -75,6 +78,31 @@ async def lifeSpan(app:FastAPI):
         await conn.execute("""
             CREATE INDEX IF NOT EXISTS idx_semantic_cache_embedding
             ON semantic_cache USING hnsw (embedding vector_cosine_ops);
+        """)
+
+        # 3. Workflows table
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS workflows (
+                id SERIAL PRIMARY KEY,
+                name VARCHAR(255) NOT NULL,
+                description TEXT,
+                system_prompt TEXT NOT NULL,
+                action_type VARCHAR(50) DEFAULT 'webhook',
+                action_url TEXT,
+                created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+            );
+        """)
+
+        # 4. Workflow Execution History / Audit Trail
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS workflow_executions (
+                id SERIAL PRIMARY KEY,
+                workflow_id INT REFERENCES workflows(id) ON DELETE CASCADE,
+                trigger_payload JSONB NOT NULL,
+                decision_output JSONB NOT NULL,
+                status VARCHAR(50) DEFAULT 'success',
+                executed_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+            );
         """)
     
     yield
@@ -171,6 +199,20 @@ class QueryResult(BaseModel):
     query:str = Field(..., min_length=1, max_length=1_000)
     top_k: int = Field(3, ge=1, le=20)  # default=3, min=1, max=20 (inclusive)
 
+class WorkflowCreateRequest(BaseModel):
+    name: str = Field(..., min_length=2, max_length=100)
+    description: Optional[str] = Field(None, max_length=255)
+    system_prompt: str = Field(
+        ...,
+        description="Instruction for evaluating the event against knowledge chunks."
+    )
+    action_type: str = Field("webhook", description="Type of action: webhook, slack, or email")
+    action_url: Optional[str] = Field(None, description="Destination URL for the action dispatch")
+
+class TriggerEventRequest(BaseModel):
+    event_text: str = Field(..., description="The main text or summary to evaluate (e.g. customer message)")
+    metadata: Optional[Dict[str, Any]] = Field(default_factory=dict)
+
 
 @app.get("/health")
 async def health_check():
@@ -187,7 +229,7 @@ async def ingest_document(request: IngestRequest):
             return {"message": "No text content found to ingest."}
 
         responses = client.models.embed_content(
-            model="gemini-embedding-001",
+            model=EMBEDDING_MODEL,
             contents=chunks,
             config={"output_dimensionality": 768}
         )
@@ -237,7 +279,7 @@ async def _hybrid_search(query: str, top_k: int, raw_embedding: list = None):
     """Shared search logic used by /retrieve and /ask."""
     if raw_embedding is None:
         result = client.models.embed_content(
-            model="gemini-embedding-001",
+            model=EMBEDDING_MODEL,
             contents=query,
             config={"output_dimensionality": 768}
         )
@@ -289,7 +331,7 @@ async def ask_rag(request:QueryResult):
     # 2. Embed Query for L2 Semantic Cache & Retrieval
     try:
         query_embedding = client.models.embed_content(
-            model="gemini-embedding-001",
+            model=EMBEDDING_MODEL,
             contents=request.query,
             config={"output_dimensionality": 768}
         )
@@ -334,7 +376,7 @@ async def ask_rag(request:QueryResult):
 
     try:
         response = client.models.generate_content(
-            model="gemini-2.5-flash",
+            model=LLM_MODEL,
             contents=[system_prompt]
         )
         generated_text = response.text
@@ -347,6 +389,150 @@ async def ask_rag(request:QueryResult):
         "answer": generated_text,
         "source": "documents_retrieved",
     }
+
+
+# ── Workflow Automation Endpoints ──────────────────────────────────────────
+
+@app.post("/workflows")
+async def create_workflow(req: WorkflowCreateRequest):
+    async with app.state.pool.acquire() as conn:
+        row = await conn.fetchrow("""
+            INSERT INTO workflows (name, description, system_prompt, action_type, action_url)
+            VALUES ($1, $2, $3, $4, $5)
+            RETURNING id, name, description, system_prompt, action_type, action_url, created_at;
+        """, req.name, req.description, req.system_prompt, req.action_type, req.action_url)
+        return dict(row)
+
+
+@app.get("/workflows")
+async def list_workflows():
+    async with app.state.pool.acquire() as conn:
+        rows = await conn.fetch("""
+            SELECT w.id, w.name, w.description, w.system_prompt, w.action_type, w.action_url, w.created_at,
+                   COUNT(e.id)::int as execution_count
+            FROM workflows w
+            LEFT JOIN workflow_executions e ON w.id = e.workflow_id
+            GROUP BY w.id
+            ORDER BY w.id DESC;
+        """)
+        return [dict(r) for r in rows]
+
+
+@app.delete("/workflows/{workflow_id}")
+async def delete_workflow(workflow_id: int):
+    async with app.state.pool.acquire() as conn:
+        res = await conn.execute("DELETE FROM workflows WHERE id = $1", workflow_id)
+        if res == "DELETE 0":
+            raise HTTPException(status_code=404, detail="Workflow not found")
+        return {"message": "Workflow deleted successfully"}
+
+
+@app.post("/workflows/{workflow_id}/trigger")
+async def trigger_workflow(workflow_id: int, event: TriggerEventRequest):
+    # 1. Fetch Workflow Definition
+    async with app.state.pool.acquire() as conn:
+        wf = await conn.fetchrow("SELECT * FROM workflows WHERE id = $1", workflow_id)
+    if not wf:
+        raise HTTPException(status_code=404, detail="Workflow not found")
+
+    # 2. Retrieve relevant internal docs using existing hybrid search
+    retrieval = await _hybrid_search(event.event_text, top_k=3)
+    matched_chunks = [item["content"] for item in retrieval.get("results", [])]
+    context_str = "\n\n".join(matched_chunks) if matched_chunks else "No specific policy docs found."
+
+    # 3. Instruct Gemini 2.5 Flash to return a STRICT JSON decision
+    prompt = f"""
+    You are an automated enterprise decision engine executing workflow: "{wf['name']}".
+    
+    SYSTEM INSTRUCTION:
+    {wf['system_prompt']}
+
+    ENTERPRISE KNOWLEDGE CONTEXT:
+    {context_str}
+
+    INCOMING EVENT PAYLOAD:
+    Text: {event.event_text}
+    Metadata: {json.dumps(event.metadata)}
+
+    Respond ONLY with a valid JSON object with the following exact keys:
+    {{
+        "decision": "APPROVE" | "REJECT" | "ESCALATE" | "REPLY",
+        "confidence": <float between 0.0 and 1.0>,
+        "reasoning": "<concise explanation citing policy context>",
+        "action_payload": {{
+            "message": "<automated email reply or action summary>",
+            "recipient": "<extracted or default recipient>"
+        }}
+    }}
+    """
+
+    try:
+        response = client.models.generate_content(
+            model=LLM_MODEL,
+            contents=[prompt],
+            config={"response_mime_type": "application/json"}
+        )
+        raw_text = response.text.strip()
+        if raw_text.startswith("```"):
+            raw_text = raw_text.split("\n", 1)[1]
+            if raw_text.endswith("```"):
+                raw_text = raw_text.rsplit("```", 1)[0]
+        decision = json.loads(raw_text.strip())
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"AI evaluation failed: {str(e)}")
+
+    # 4. Outbound Action Dispatch (HTTP Webhook / Slack)
+    action_status = "executed"
+    if wf["action_url"]:
+        try:
+            async with httpx.AsyncClient(timeout=5.0) as http_client:
+                await http_client.post(
+                    wf["action_url"],
+                    json={
+                        "workflow_id": workflow_id,
+                        "workflow_name": wf["name"],
+                        "decision": decision,
+                        "original_event": event.model_dump(),
+                    }
+                )
+        except Exception:
+            action_status = "action_dispatch_failed"
+
+    # 5. Record in Audit Log
+    async with app.state.pool.acquire() as conn:
+        await conn.execute("""
+            INSERT INTO workflow_executions (workflow_id, trigger_payload, decision_output, status)
+            VALUES ($1, $2::jsonb, $3::jsonb, $4)
+        """, workflow_id, json.dumps(event.model_dump()), json.dumps(decision), action_status)
+
+    return {
+        "status": action_status,
+        "workflow_id": workflow_id,
+        "decision": decision,
+        "referenced_docs_count": len(matched_chunks)
+    }
+
+
+@app.get("/workflows/{workflow_id}/executions")
+async def get_workflow_executions(workflow_id: int, limit: int = 20):
+    async with app.state.pool.acquire() as conn:
+        rows = await conn.fetch("""
+            SELECT id, trigger_payload, decision_output, status, executed_at
+            FROM workflow_executions
+            WHERE workflow_id = $1
+            ORDER BY id DESC
+            LIMIT $2;
+        """, workflow_id, limit)
+        return [
+            {
+                "id": r["id"],
+                "trigger_payload": json.loads(r["trigger_payload"]) if isinstance(r["trigger_payload"], str) else r["trigger_payload"],
+                "decision_output": json.loads(r["decision_output"]) if isinstance(r["decision_output"], str) else r["decision_output"],
+                "status": r["status"],
+                "executed_at": r["executed_at"]
+            }
+            for r in rows
+        ]
 
 
 

@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Nav, SectionLabel } from "../components";
 
-const API = process.env.NEXT_PUBLIC_BACKEND_URL;
+const API = process.env.NEXT_PUBLIC_BACKEND_URL || "http://localhost:8000";
 
 interface AskResponse {
   query: string;
@@ -22,7 +22,7 @@ interface HistoryEntry {
 }
 
 /* ── Typewriter hook ───────────────────────────────────────── */
-function useTypewriter(text: string, speed = 12) {
+function useTypewriter(text: string, speed = 10) {
   const [displayed, setDisplayed] = useState("");
   const [done, setDone] = useState(false);
 
@@ -55,26 +55,26 @@ function SourceBadge({
 }) {
   if (source === "cache") {
     return (
-      <span className="inline-flex items-center gap-1.5 text-xs tracking-[0.1em] uppercase border border-gold/40 text-gold px-2.5 py-0.5">
+      <span className="inline-flex items-center gap-1.5 text-[11px] tracking-[0.1em] uppercase border border-gold/40 text-gold px-2.5 py-0.5 rounded-full bg-gold/10">
         <span className="w-1.5 h-1.5 rounded-full bg-gold pulse-dot" />
-        cache hit
+        L1/L2 Cache Hit
         {similarity !== undefined && (
-          <span className="text-gold/60 ml-1">· {(similarity * 100).toFixed(1)}%</span>
+          <span className="text-gold/70 ml-1 font-mono">· {(similarity * 100).toFixed(0)}%</span>
         )}
       </span>
     );
   }
   if (source === "documents_retrieved") {
     return (
-      <span className="inline-flex items-center gap-1.5 text-xs tracking-[0.1em] uppercase border border-rim text-subtle px-2.5 py-0.5">
-        <span className="w-1.5 h-1.5 rounded-full bg-subtle" />
-        retrieved
+      <span className="inline-flex items-center gap-1.5 text-[11px] tracking-[0.1em] uppercase border border-sky-500/40 text-sky-400 px-2.5 py-0.5 rounded-full bg-sky-500/10">
+        <span className="w-1.5 h-1.5 rounded-full bg-sky-400" />
+        Hybrid Retrieved
       </span>
     );
   }
   return (
-    <span className="inline-flex items-center gap-1.5 text-xs tracking-[0.1em] uppercase border border-danger/40 text-danger px-2.5 py-0.5">
-      no documents
+    <span className="inline-flex items-center gap-1.5 text-[11px] tracking-[0.1em] uppercase border border-danger/40 text-danger px-2.5 py-0.5 rounded-full bg-danger/10">
+      No Matching Docs
     </span>
   );
 }
@@ -87,25 +87,25 @@ function AnswerCard({ entry, animate }: { entry: HistoryEntry; animate: boolean 
   const showCursor = animate && !done;
 
   return (
-    <div className="border border-rim bg-surface">
-      {/* Card header */}
-      <div className="flex items-center justify-between px-6 py-3 border-b border-rim">
+    <div className="border border-rim rounded-xl bg-surface/80 backdrop-blur-md overflow-hidden shadow-lg transition-all hover:border-gold/30">
+      {/* Card Header */}
+      <div className="flex items-center justify-between px-6 py-3.5 border-b border-rim bg-white/[0.01]">
         <div className="flex items-center gap-3">
-          <span className="text-gold font-serif text-sm">⊕</span>
-          <span className="text-fg text-sm leading-snug max-w-[480px] truncate" title={entry.query}>
+          <span className="text-gold font-serif text-base">⊕</span>
+          <span className="text-fg text-sm font-medium leading-snug max-w-[520px] truncate" title={entry.query}>
             {entry.query}
           </span>
         </div>
         <div className="flex items-center gap-3 shrink-0">
           <SourceBadge source={entry.source} similarity={entry.similarity} />
-          <span className="text-subtle text-xs">
+          <span className="text-subtle text-xs font-mono">
             {entry.timestamp.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
           </span>
         </div>
       </div>
 
-      {/* Answer body */}
-      <div className="px-6 py-5">
+      {/* Answer Body */}
+      <div className="px-6 py-5 bg-[#090b10]/40">
         <p className="text-ink text-sm leading-[1.85] whitespace-pre-wrap">
           {shownText}
           {showCursor && <span className="text-gold animate-pulse">▌</span>}
@@ -115,7 +115,7 @@ function AnswerCard({ entry, animate }: { entry: HistoryEntry; animate: boolean 
   );
 }
 
-/* ── Main page ─────────────────────────────────────────────── */
+/* ── Main Ask Page Component ───────────────────────────────── */
 export default function AskPage() {
   const [query, setQuery] = useState("");
   const [topK, setTopK] = useState(3);
@@ -169,34 +169,53 @@ export default function AskPage() {
   }
 
   const inputCls =
-    "flex-1 bg-[#0f0e0b] border border-rim text-fg font-sans text-sm px-4 py-3 outline-none " +
-    "transition-colors focus:border-gold-dim placeholder:text-subtle placeholder:opacity-60 leading-relaxed";
+    "flex-1 bg-[#0b0d14] border border-rim rounded-lg text-fg font-sans text-sm px-4 py-3 outline-none " +
+    "transition-all focus:border-gold/60 focus:ring-1 focus:ring-gold/20 placeholder:text-subtle/50 leading-relaxed";
 
   const btnCls =
-    "inline-flex items-center gap-2 font-sans text-sm tracking-[0.08em] uppercase " +
-    "px-6 py-3 border border-gold text-gold bg-transparent hover:bg-gold hover:text-bg " +
+    "inline-flex items-center justify-center gap-2 font-sans text-xs tracking-[0.12em] uppercase " +
+    "px-6 py-3 rounded-lg bg-gold text-bg font-bold shadow-md shadow-gold/20 hover:bg-amber-400 " +
     "transition-all cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed shrink-0";
 
   return (
     <div className="relative z-[1] min-h-screen flex flex-col bg-bg text-fg font-sans">
       <Nav active="ask" />
 
-      <div className="max-w-[1100px] mx-auto px-8 w-full pt-8 flex-1 flex flex-col">
+      <div className="max-w-[1140px] mx-auto px-8 w-full pt-10 flex-1 flex flex-col pb-16">
+        {/* ── Page Header ──────────────────────────────────── */}
+        <div className="border-b border-rim pb-6 mb-8 flex justify-between items-end flex-wrap gap-4">
+          <div>
+            <p className="text-subtle text-xs tracking-[0.22em] uppercase mb-2">AI Answer Engine</p>
+            <h1 className="font-serif text-[2.25rem] text-fg">
+              Ask your documents<em className="text-gold">,</em>
+            </h1>
+            <p className="text-subtle text-sm mt-2 max-w-[600px] leading-relaxed">
+              Sub-millisecond Redis exact caching, vector similarity caching, and Gemini 2.5 Flash
+              generates grounded answers without hallucination.
+            </p>
+          </div>
 
-        {/* ── Page header ──────────────────────────────────── */}
-        <div className="border-b border-rim pb-6 mb-8">
-          <p className="text-subtle text-xs tracking-[0.22em] uppercase mb-2">AI Answer Engine</p>
-          <h1 className="font-serif text-[1.75rem] text-fg">
-            Ask your documents<em className="text-gold">,</em>
-          </h1>
-          <p className="text-subtle text-sm mt-2 max-w-[560px] leading-[1.7]">
-            Queries are semantically cached. On a cache miss, hybrid retrieval + Gemini generates
-            a grounded answer. Results are stored for 24h.
-          </p>
+          {/* Metrics bar */}
+          {history.length > 0 && (
+            <div className="flex gap-4 border border-rim rounded-lg bg-surface px-4 py-2 text-xs">
+              <StatPill label="Queries" value={history.length} />
+              <div className="w-px bg-rim" />
+              <StatPill
+                label="Cache Hits"
+                value={history.filter((h) => h.source === "cache").length}
+                highlight
+              />
+              <div className="w-px bg-rim" />
+              <StatPill
+                label="Retrieved"
+                value={history.filter((h) => h.source === "documents_retrieved").length}
+              />
+            </div>
+          )}
         </div>
 
-        {/* ── Input row ────────────────────────────────────── */}
-        <div className="flex gap-2 mb-2">
+        {/* ── Input Row ────────────────────────────────────── */}
+        <div className="flex gap-3 mb-4 items-center">
           <input
             ref={inputRef}
             id="ask-input"
@@ -208,8 +227,8 @@ export default function AskPage() {
             onKeyDown={(e) => e.key === "Enter" && handleAsk()}
             disabled={loading}
           />
-          <div className="flex flex-col gap-1 shrink-0 w-20">
-            <label className="text-subtle text-xs tracking-[0.1em] uppercase px-1">Top K</label>
+          <div className="flex items-center gap-2 border border-rim rounded-lg px-3 py-2 bg-[#0b0d14] shrink-0">
+            <label className="text-subtle text-[11px] tracking-wider uppercase">Top K</label>
             <input
               id="top-k"
               type="number"
@@ -217,7 +236,7 @@ export default function AskPage() {
               max={10}
               value={topK}
               onChange={(e) => setTopK(Number(e.target.value))}
-              className="bg-[#0f0e0b] border border-rim text-fg font-sans text-sm px-3 py-3 outline-none focus:border-gold-dim transition-colors w-full"
+              className="bg-transparent text-fg font-sans text-xs w-10 text-center outline-none"
             />
           </div>
           <button
@@ -227,74 +246,54 @@ export default function AskPage() {
             disabled={loading || !query.trim()}
           >
             {loading ? <span className="spinner" /> : null}
-            {loading ? "Thinking…" : "Ask →"}
+            {loading ? "Thinking…" : "Ask Question →"}
           </button>
         </div>
 
-        {/* ── Error ────────────────────────────────────────── */}
+        {/* ── Error Banner ─────────────────────────────────── */}
         {error && (
-          <div className="mb-4 text-sm px-4 py-2.5 border-l-2 border-danger bg-danger/5 text-danger">
+          <div className="mb-4 text-xs px-4 py-3 rounded-lg border-l-2 border-danger bg-danger/5 text-danger">
             {error}
           </div>
         )}
 
-        {/* ── Metrics bar ──────────────────────────────────── */}
-        {history.length > 0 && (
-          <div className="flex gap-6 border-b border-rim py-3 mb-6">
-            <StatPill label="Total queries" value={history.length} />
-            <StatPill
-              label="Cache hits"
-              value={history.filter((h) => h.source === "cache").length}
-              highlight
-            />
-            <StatPill
-              label="Retrieved"
-              value={history.filter((h) => h.source === "documents_retrieved").length}
-            />
-          </div>
-        )}
-
-        {/* ── Answer feed ──────────────────────────────────── */}
-        <div className="flex-1 flex flex-col gap-4 pb-10">
-
-          {/* Empty state */}
+        {/* ── Answer Feed ──────────────────────────────────── */}
+        <div className="flex-1 flex flex-col gap-4 pb-10 mt-4">
+          {/* Empty State */}
           {history.length === 0 && !loading && (
-            <div className="border border-rim bg-surface p-8 flex flex-col items-start gap-5">
-              <SectionLabel>How it works</SectionLabel>
-              <div className="grid grid-cols-3 gap-px bg-rim w-full border border-rim">
+            <div className="border border-rim rounded-xl bg-surface/80 p-8 backdrop-blur-md shadow-lg flex flex-col items-start gap-6">
+              <SectionLabel>Architecture & Performance</SectionLabel>
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-px bg-rim w-full border border-rim rounded-lg overflow-hidden">
                 {[
-                  ["①", "Semantic Cache", "Check if a similar query (≥ 95% similarity) was answered before — instant response."],
-                  ["②", "Hybrid Retrieval", "On cache miss, combine vector search + full-text search via Reciprocal Rank Fusion."],
-                  ["③", "Gemini Generation", "Pass the top-K retrieved chunks to Gemini 2.5 Flash to generate a grounded answer."],
+                  ["①", "Dual-Layer Cache", "Instant exact match in Redis, plus cosine similarity (≥95%) in pgvector."],
+                  ["②", "Hybrid Search", "HNSW cosine vector distance blended with GIN English full-text search via RRF."],
+                  ["③", "Gemini 2.5 Flash", "Strict zero-hallucination prompt synthesizes a clear, direct answer with citations."],
                 ].map(([num, title, desc]) => (
-                  <div key={title} className="bg-surface p-6">
-                    <div className="text-gold text-lg mb-2 font-serif">{num}</div>
-                    <div className="text-fg text-sm mb-1">{title}</div>
-                    <div className="text-subtle text-xs leading-[1.65]">{desc}</div>
+                  <div key={title} className="bg-surface/90 p-6 space-y-2">
+                    <div className="text-gold text-base font-serif">{num}</div>
+                    <div className="text-fg text-sm font-medium">{title}</div>
+                    <div className="text-subtle text-xs leading-relaxed">{desc}</div>
                   </div>
                 ))}
               </div>
             </div>
           )}
 
-          {/* Loading skeleton */}
+          {/* Loading Skeleton */}
           {loading && (
-            <div className="border border-rim bg-surface animate-pulse">
-              <div className="flex items-center gap-3 px-6 py-3 border-b border-rim">
+            <div className="border border-rim rounded-xl bg-surface/80 p-6 backdrop-blur-md animate-pulse space-y-3">
+              <div className="flex items-center gap-3">
                 <span className="spinner" />
-                <span className="text-subtle text-sm tracking-[0.08em] uppercase">
-                  Processing query…
+                <span className="text-subtle text-xs tracking-wider uppercase">
+                  Processing Query & Searching Indices…
                 </span>
               </div>
-              <div className="px-6 py-5 space-y-2">
-                <div className="h-3 bg-rim rounded w-3/4" />
-                <div className="h-3 bg-rim rounded w-1/2" />
-                <div className="h-3 bg-rim rounded w-5/6" />
-              </div>
+              <div className="h-3 bg-white/[0.06] rounded w-3/4 mt-4" />
+              <div className="h-3 bg-white/[0.06] rounded w-1/2" />
             </div>
           )}
 
-          {/* Answer cards */}
+          {/* Answer Cards */}
           {history.map((entry) => (
             <AnswerCard
               key={entry.id}
@@ -308,9 +307,9 @@ export default function AskPage() {
       </div>
 
       {/* ── Footer ───────────────────────────────────────────── */}
-      <footer className="border-t border-rim py-5">
-        <div className="max-w-[1100px] mx-auto px-8 flex justify-between items-center text-xs text-subtle tracking-[0.06em]">
-          <span>Enterprise RAG · v0.1.0</span>
+      <footer className="border-t border-rim py-5 bg-surface/40">
+        <div className="max-w-[1140px] mx-auto px-8 flex justify-between items-center text-xs text-subtle tracking-[0.06em]">
+          <span>Enterprise RAG · AI Answer Engine</span>
           <span>Gemini 2.5 Flash · Redis · pgvector</span>
         </div>
       </footer>
@@ -318,7 +317,7 @@ export default function AskPage() {
   );
 }
 
-/* ── Small stat pill ───────────────────────────────────────── */
+/* ── Small Stat Pill ───────────────────────────────────────── */
 function StatPill({
   label,
   value,
@@ -329,9 +328,9 @@ function StatPill({
   highlight?: boolean;
 }) {
   return (
-    <div className="flex items-center gap-2">
-      <span className={`text-sm font-serif ${highlight ? "text-gold" : "text-fg"}`}>{value}</span>
-      <span className="text-subtle text-xs tracking-[0.08em] uppercase">{label}</span>
+    <div className="flex items-center gap-1.5">
+      <span className={`text-xs font-serif ${highlight ? "text-gold font-bold" : "text-fg"}`}>{value}</span>
+      <span className="text-subtle text-[11px] uppercase tracking-wider">{label}</span>
     </div>
   );
 }
