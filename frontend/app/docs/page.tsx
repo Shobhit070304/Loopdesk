@@ -344,10 +344,10 @@ export default function DocsPage() {
   }
 
   return (
-    <div className="relative z-[1] min-h-screen flex flex-col bg-bg text-fg font-sans">
+    <div className="relative z-1 min-h-screen flex flex-col bg-bg text-fg font-sans">
       <Nav active="docs" />
 
-      <main className="max-w-[1140px] mx-auto px-8 w-full pt-10 flex-1 pb-20">
+      <main className="max-w-285 mx-auto px-8 w-full pt-10 flex-1 pb-20">
         {/* ── Header ─────────────────────────────────────────────── */}
         <div className="border-b border-rim pb-8 mb-10 flex justify-between items-end flex-wrap gap-6">
           <div>
@@ -357,7 +357,7 @@ export default function DocsPage() {
             <h1 className="font-serif text-[2.5rem] leading-tight text-fg">
               API <em className="text-gold">Documentation</em>
             </h1>
-            <p className="text-subtle text-sm mt-2 max-w-[640px] leading-relaxed">
+            <p className="text-subtle text-sm mt-2 max-w-160 leading-relaxed">
               Integrate enterprise retrieval, question answering, and decision automations into
               your own applications with simple JSON REST endpoints.
             </p>
@@ -410,7 +410,7 @@ export default function DocsPage() {
                 className="border border-rim bg-surface/80 rounded-xl overflow-hidden backdrop-blur-md transition-all hover:border-gold/30"
               >
                 {/* Endpoint Header Bar */}
-                <div className="p-6 border-b border-rim/80 flex justify-between items-start gap-4 flex-wrap bg-white/[0.01]">
+                <div className="p-6 border-b border-rim/80 flex justify-between items-start gap-4 flex-wrap bg-white/1">
                   <div>
                     <div className="flex items-center gap-3 mb-2 flex-wrap">
                       <span
@@ -430,7 +430,7 @@ export default function DocsPage() {
                       </span>
                     </div>
                     <h2 className="font-serif text-lg text-fg">{ep.title}</h2>
-                    <p className="text-subtle text-xs mt-1.5 max-w-[700px] leading-relaxed">
+                    <p className="text-subtle text-xs mt-1.5 max-w-175 leading-relaxed">
                       {ep.description}
                     </p>
                   </div>
@@ -516,7 +516,7 @@ export default function DocsPage() {
 
       {/* ── Footer ──────────────────────────────────────────────── */}
       <footer className="border-t border-rim py-6 bg-surface/40">
-        <div className="max-w-[1140px] mx-auto px-8 flex justify-between items-center text-xs text-subtle tracking-[0.06em]">
+        <div className="max-w-285 mx-auto px-8 flex justify-between items-center text-xs text-subtle tracking-[0.06em]">
           <span>Enterprise RAG · Developer Documentation</span>
           <span>FastAPI · PostgreSQL · Gemini 2.5 Flash</span>
         </div>

@@ -205,10 +205,10 @@ export default function WorkflowsPage() {
     "transition-all cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed";
 
   return (
-    <div className="relative z-[1] min-h-screen flex flex-col bg-bg text-fg font-sans">
+    <div className="relative z-1 min-h-screen flex flex-col bg-bg text-fg font-sans">
       <Nav active="workflows" />
 
-      <main className="max-w-[1140px] mx-auto px-8 w-full pt-10 flex-1 pb-20">
+      <main className="max-w-285 mx-auto px-8 w-full pt-10 flex-1 pb-20">
         {/* ── Page Header ────────────────────────────────────────── */}
         <div className="border-b border-rim pb-6 mb-8 flex justify-between items-end flex-wrap gap-4">
           <div>
@@ -218,7 +218,7 @@ export default function WorkflowsPage() {
             <h1 className="font-serif text-[2.25rem] text-fg">
               Knowledge-Grounded <em className="text-gold">Workflows</em>
             </h1>
-            <p className="text-subtle text-sm mt-2 max-w-[620px] leading-relaxed">
+            <p className="text-subtle text-sm mt-2 max-w-155 leading-relaxed">
               Evaluate incoming events against your enterprise documents in real time.
               Gemini determines policy compliance and automatically dispatches outbound actions.
             </p>
@@ -269,7 +269,7 @@ export default function WorkflowsPage() {
 
               <form onSubmit={handleCreateWorkflow} className="space-y-4">
                 <div>
-                  <label className="block text-subtle text-xs tracking-[0.1em] uppercase mb-1">
+                  <label className="block text-subtle text-xs tracking-widest uppercase mb-1">
                     Workflow Name *
                   </label>
                   <input
@@ -283,7 +283,7 @@ export default function WorkflowsPage() {
                 </div>
 
                 <div>
-                  <label className="block text-subtle text-xs tracking-[0.1em] uppercase mb-1">
+                  <label className="block text-subtle text-xs tracking-widest uppercase mb-1">
                     Description (optional)
                   </label>
                   <input
@@ -296,7 +296,7 @@ export default function WorkflowsPage() {
                 </div>
 
                 <div>
-                  <label className="block text-subtle text-xs tracking-[0.1em] uppercase mb-1">
+                  <label className="block text-subtle text-xs tracking-widest uppercase mb-1">
                     Decision Instructions (System Prompt) *
                   </label>
                   <textarea
@@ -311,7 +311,7 @@ export default function WorkflowsPage() {
 
                 <div className="grid grid-cols-3 gap-3">
                   <div>
-                    <label className="block text-subtle text-xs tracking-[0.1em] uppercase mb-1">
+                    <label className="block text-subtle text-xs tracking-widest uppercase mb-1">
                       Action Type
                     </label>
                     <select
@@ -325,7 +325,7 @@ export default function WorkflowsPage() {
                     </select>
                   </div>
                   <div className="col-span-2">
-                    <label className="block text-subtle text-xs tracking-[0.1em] uppercase mb-1">
+                    <label className="block text-subtle text-xs tracking-widest uppercase mb-1">
                       Destination Webhook URL (optional)
                     </label>
                     <input
@@ -365,14 +365,14 @@ export default function WorkflowsPage() {
                         onClick={() => setSelectedWf(wf)}
                         className={`py-3.5 px-3 -mx-3 rounded-lg flex items-center justify-between cursor-pointer transition-all ${
                           isSelected
-                            ? "bg-white/[0.04] border-l-2 border-gold pl-3"
-                            : "hover:bg-white/[0.02]"
+                            ? "bg-white/4 border-l-2 border-gold pl-3"
+                            : "hover:bg-white/2"
                         }`}
                       >
                         <div className="min-w-0 pr-4">
                           <div className="flex items-center gap-2">
                             <span className="font-serif text-sm text-fg truncate">{wf.name}</span>
-                            <span className="text-[10px] tracking-wider uppercase px-2 py-0.5 rounded border border-rim text-subtle bg-white/[0.02]">
+                            <span className="text-[10px] tracking-wider uppercase px-2 py-0.5 rounded border border-rim text-subtle bg-white/2">
                               {wf.action_type}
                             </span>
                           </div>
@@ -427,7 +427,7 @@ export default function WorkflowsPage() {
               )}
 
               <div className="space-y-3">
-                <label className="block text-subtle text-xs tracking-[0.1em] uppercase">
+                <label className="block text-subtle text-xs tracking-widest uppercase">
                   Incoming Event Text (Ticket / Message / Claim)
                 </label>
                 <textarea
@@ -471,7 +471,7 @@ export default function WorkflowsPage() {
 
                 {/* Reasoning */}
                 <div>
-                  <span className="text-subtle text-xs tracking-[0.1em] uppercase block mb-1">
+                  <span className="text-subtle text-xs tracking-widest uppercase block mb-1">
                     AI Policy Reasoning
                   </span>
                   <p className="text-ink text-xs leading-[1.75] rounded-lg bg-surface border border-rim p-3.5">
@@ -483,7 +483,7 @@ export default function WorkflowsPage() {
                 {triggerResult.decision.action_payload?.message && (
                   <div>
                     <div className="flex justify-between items-center mb-1">
-                      <span className="text-subtle text-xs tracking-[0.1em] uppercase">
+                      <span className="text-subtle text-xs tracking-widest uppercase">
                         Generated Action / Reply Payload
                       </span>
                       <button
@@ -545,7 +545,7 @@ export default function WorkflowsPage() {
                 </thead>
                 <tbody className="divide-y divide-rim text-ink">
                   {executions.map((ex) => (
-                    <tr key={ex.id} className="hover:bg-white/[0.01]">
+                    <tr key={ex.id} className="hover:bg-white/1">
                       <td className="py-3 px-3 font-mono text-subtle">#{ex.id}</td>
                       <td className="py-3 px-3 text-subtle whitespace-nowrap font-mono text-[11px]">
                         {new Date(ex.executed_at).toLocaleTimeString([], {
@@ -554,13 +554,13 @@ export default function WorkflowsPage() {
                           second: "2-digit",
                         })}
                       </td>
-                      <td className="py-3 px-3 max-w-[200px] truncate" title={ex.trigger_payload?.event_text}>
+                      <td className="py-3 px-3 max-w-50 truncate" title={ex.trigger_payload?.event_text}>
                         {ex.trigger_payload?.event_text || "—"}
                       </td>
                       <td className="py-3 px-3">
                         <DecisionBadge decision={ex.decision_output?.decision || "UNKNOWN"} />
                       </td>
-                      <td className="py-3 px-3 max-w-[280px] truncate" title={ex.decision_output?.reasoning}>
+                      <td className="py-3 px-3 max-w-70 truncate" title={ex.decision_output?.reasoning}>
                         {ex.decision_output?.reasoning || "—"}
                       </td>
                       <td className="py-3 px-3">
@@ -585,7 +585,7 @@ export default function WorkflowsPage() {
 
       {/* ── Footer ──────────────────────────────────────────────── */}
       <footer className="border-t border-rim py-5 bg-surface/40">
-        <div className="max-w-[1140px] mx-auto px-8 flex justify-between items-center text-xs text-subtle tracking-[0.06em]">
+        <div className="max-w-285 mx-auto px-8 flex justify-between items-center text-xs text-subtle tracking-[0.06em]">
           <span>Enterprise RAG · Automation Engine</span>
           <span>FastAPI · PostgreSQL · Gemini 2.5 Flash</span>
         </div>
@@ -625,7 +625,7 @@ function DecisionBadge({ decision }: { decision: string }) {
   }
 
   return (
-    <span className="inline-flex items-center gap-1.5 text-xs tracking-wider uppercase border border-rim text-subtle px-2.5 py-0.5 rounded-full bg-white/[0.02]">
+    <span className="inline-flex items-center gap-1.5 text-xs tracking-wider uppercase border border-rim text-subtle px-2.5 py-0.5 rounded-full bg-white/2">
       {decision}
     </span>
   );

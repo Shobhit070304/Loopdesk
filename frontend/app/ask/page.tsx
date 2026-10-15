@@ -55,7 +55,7 @@ function SourceBadge({
 }) {
   if (source === "cache") {
     return (
-      <span className="inline-flex items-center gap-1.5 text-[11px] tracking-[0.1em] uppercase border border-gold/40 text-gold px-2.5 py-0.5 rounded-full bg-gold/10">
+      <span className="inline-flex items-center gap-1.5 text-[11px] tracking-widest uppercase border border-gold/40 text-gold px-2.5 py-0.5 rounded-full bg-gold/10">
         <span className="w-1.5 h-1.5 rounded-full bg-gold pulse-dot" />
         L1/L2 Cache Hit
         {similarity !== undefined && (
@@ -66,14 +66,14 @@ function SourceBadge({
   }
   if (source === "documents_retrieved") {
     return (
-      <span className="inline-flex items-center gap-1.5 text-[11px] tracking-[0.1em] uppercase border border-sky-500/40 text-sky-400 px-2.5 py-0.5 rounded-full bg-sky-500/10">
+      <span className="inline-flex items-center gap-1.5 text-[11px] tracking-widest uppercase border border-sky-500/40 text-sky-400 px-2.5 py-0.5 rounded-full bg-sky-500/10">
         <span className="w-1.5 h-1.5 rounded-full bg-sky-400" />
         Hybrid Retrieved
       </span>
     );
   }
   return (
-    <span className="inline-flex items-center gap-1.5 text-[11px] tracking-[0.1em] uppercase border border-danger/40 text-danger px-2.5 py-0.5 rounded-full bg-danger/10">
+    <span className="inline-flex items-center gap-1.5 text-[11px] tracking-widest uppercase border border-danger/40 text-danger px-2.5 py-0.5 rounded-full bg-danger/10">
       No Matching Docs
     </span>
   );
@@ -89,10 +89,10 @@ function AnswerCard({ entry, animate }: { entry: HistoryEntry; animate: boolean 
   return (
     <div className="border border-rim rounded-xl bg-surface/80 backdrop-blur-md overflow-hidden shadow-lg transition-all hover:border-gold/30">
       {/* Card Header */}
-      <div className="flex items-center justify-between px-6 py-3.5 border-b border-rim bg-white/[0.01]">
+      <div className="flex items-center justify-between px-6 py-3.5 border-b border-rim bg-white/1">
         <div className="flex items-center gap-3">
           <span className="text-gold font-serif text-base">⊕</span>
-          <span className="text-fg text-sm font-medium leading-snug max-w-[520px] truncate" title={entry.query}>
+          <span className="text-fg text-sm font-medium leading-snug max-w-130 truncate" title={entry.query}>
             {entry.query}
           </span>
         </div>
@@ -178,10 +178,10 @@ export default function AskPage() {
     "transition-all cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed shrink-0";
 
   return (
-    <div className="relative z-[1] min-h-screen flex flex-col bg-bg text-fg font-sans">
+    <div className="relative z-1 min-h-screen flex flex-col bg-bg text-fg font-sans">
       <Nav active="ask" />
 
-      <div className="max-w-[1140px] mx-auto px-8 w-full pt-10 flex-1 flex flex-col pb-16">
+      <div className="max-w-285 mx-auto px-8 w-full pt-10 flex-1 flex flex-col pb-16">
         {/* ── Page Header ──────────────────────────────────── */}
         <div className="border-b border-rim pb-6 mb-8 flex justify-between items-end flex-wrap gap-4">
           <div>
@@ -189,7 +189,7 @@ export default function AskPage() {
             <h1 className="font-serif text-[2.25rem] text-fg">
               Ask your documents<em className="text-gold">,</em>
             </h1>
-            <p className="text-subtle text-sm mt-2 max-w-[600px] leading-relaxed">
+            <p className="text-subtle text-sm mt-2 max-w-150 leading-relaxed">
               Sub-millisecond Redis exact caching, vector similarity caching, and Gemini 2.5 Flash
               generates grounded answers without hallucination.
             </p>
@@ -288,8 +288,8 @@ export default function AskPage() {
                   Processing Query & Searching Indices…
                 </span>
               </div>
-              <div className="h-3 bg-white/[0.06] rounded w-3/4 mt-4" />
-              <div className="h-3 bg-white/[0.06] rounded w-1/2" />
+              <div className="h-3 bg-white/6 rounded w-3/4 mt-4" />
+              <div className="h-3 bg-white/6 rounded w-1/2" />
             </div>
           )}
 
@@ -308,7 +308,7 @@ export default function AskPage() {
 
       {/* ── Footer ───────────────────────────────────────────── */}
       <footer className="border-t border-rim py-5 bg-surface/40">
-        <div className="max-w-[1140px] mx-auto px-8 flex justify-between items-center text-xs text-subtle tracking-[0.06em]">
+        <div className="max-w-285 mx-auto px-8 flex justify-between items-center text-xs text-subtle tracking-[0.06em]">
           <span>Enterprise RAG · AI Answer Engine</span>
           <span>Gemini 2.5 Flash · Redis · pgvector</span>
         </div>

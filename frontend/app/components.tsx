@@ -11,8 +11,8 @@ export function Nav({
     "text-subtle no-underline text-xs tracking-[0.16em] uppercase transition-all duration-200 hover:text-fg py-1.5 px-3 rounded-md";
 
   return (
-    <nav className="sticky top-0 z-50 backdrop-blur-md bg-[#08090e]/80 border-b border-rim py-3.5">
-      <div className="flex justify-between items-center max-w-[1140px] mx-auto px-8">
+    <nav className="sticky top-0 z-50 backdrop-blur-md bg-bg/80 border-b border-rim py-3.5">
+      <div className="flex justify-between items-center max-w-285 mx-auto px-8">
         <Link
           href="/"
           className="flex items-center gap-2.5 font-serif text-xl text-gold no-underline tracking-[0.08em] group"
@@ -29,7 +29,7 @@ export function Nav({
               href="/"
               className={`${linkBase} ${
                 active === "home"
-                  ? "text-fg bg-white/[0.06] border border-white/[0.08]"
+                  ? "text-fg bg-white/6 border border-white/8"
                   : ""
               }`}
             >
@@ -41,7 +41,7 @@ export function Nav({
               href="/rag"
               className={`${linkBase} ${
                 active === "rag"
-                  ? "text-fg bg-white/[0.06] border border-white/[0.08]"
+                  ? "text-fg bg-white/6 border border-white/8"
                   : ""
               }`}
             >
@@ -53,7 +53,7 @@ export function Nav({
               href="/ask"
               className={`${linkBase} ${
                 active === "ask"
-                  ? "text-fg bg-white/[0.06] border border-white/[0.08]"
+                  ? "text-fg bg-white/6 border border-white/8"
                   : ""
               }`}
             >
@@ -65,7 +65,7 @@ export function Nav({
               href="/workflows"
               className={`${linkBase} ${
                 active === "workflows"
-                  ? "text-fg bg-white/[0.06] border border-white/[0.08]"
+                  ? "text-fg bg-white/6 border border-white/8"
                   : ""
               }`}
             >
@@ -77,7 +77,7 @@ export function Nav({
               href="/docs"
               className={`${linkBase} ${
                 active === "docs"
-                  ? "text-fg bg-white/[0.06] border border-white/[0.08]"
+                  ? "text-fg bg-white/6 border border-white/8"
                   : ""
               }`}
             >
@@ -98,7 +98,7 @@ export function SectionLabel({ children }: { children: ReactNode }) {
       <span className="text-subtle text-xs tracking-[0.2em] uppercase whitespace-nowrap font-medium">
         {children}
       </span>
-      <div className="flex-1 h-px bg-gradient-to-r from-rim via-rim/60 to-transparent" />
+      <div className="flex-1 h-px bg-linear-to-r from-rim via-rim/60 to-transparent" />
     </div>
   );
 }

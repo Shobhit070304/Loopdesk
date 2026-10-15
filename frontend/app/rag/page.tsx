@@ -86,10 +86,10 @@ export default function RagPage() {
     "transition-all cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed";
 
   return (
-    <div className="relative z-[1] min-h-screen flex flex-col bg-bg text-fg font-sans">
+    <div className="relative z-1 min-h-screen flex flex-col bg-bg text-fg font-sans">
       <Nav active="rag" />
 
-      <div className="max-w-[1140px] mx-auto px-8 w-full pt-10 flex-1 flex flex-col pb-16">
+      <div className="max-w-285 mx-auto px-8 w-full pt-10 flex-1 flex flex-col pb-16">
         {/* ── Page Header ───────────────────────────────── */}
         <div className="border-b border-rim pb-6 mb-8 flex justify-between items-end flex-wrap gap-4">
           <div>
@@ -99,7 +99,7 @@ export default function RagPage() {
             <h1 className="font-serif text-[2.25rem] text-fg">
               Retrieval <em className="text-gold">Interface</em>
             </h1>
-            <p className="text-subtle text-sm mt-2 max-w-[580px] leading-relaxed">
+            <p className="text-subtle text-sm mt-2 max-w-145 leading-relaxed">
               Ingest business documents into pgvector and inspect hybrid semantic + keyword
               search results scored via Reciprocal Rank Fusion.
             </p>
@@ -117,7 +117,7 @@ export default function RagPage() {
             <SectionLabel>1. Document Ingestion</SectionLabel>
 
             <div className="flex flex-col gap-1.5 mb-5">
-              <label className="text-subtle text-xs tracking-[0.1em] uppercase">Document text</label>
+              <label className="text-subtle text-xs tracking-widest uppercase">Document text</label>
               <textarea
                 id="ingest-text"
                 rows={9}
@@ -157,7 +157,7 @@ export default function RagPage() {
 
             <div className="border-t border-rim my-8" />
             <SectionLabel>Pipeline Architecture</SectionLabel>
-            <div className="text-subtle text-xs leading-[2] space-y-1 font-mono">
+            <div className="text-subtle text-xs leading-loose space-y-1 font-mono">
               <div>① Recursive text split (500 char chunk / 50 overlap)</div>
               <div>② Dense embeddings generated (768-dim)</div>
               <div>③ PostgreSQL storage with HNSW vector index</div>
@@ -170,7 +170,7 @@ export default function RagPage() {
             <SectionLabel>2. Hybrid Search Engine</SectionLabel>
 
             <div className="flex flex-col gap-1.5 mb-5">
-              <label className="text-subtle text-xs tracking-[0.1em] uppercase">Search Query</label>
+              <label className="text-subtle text-xs tracking-widest uppercase">Search Query</label>
               <input
                 type="text"
                 id="query-input"
@@ -184,7 +184,7 @@ export default function RagPage() {
 
             <div className="flex items-end gap-4 mb-6">
               <div className="flex flex-col gap-1.5 w-28">
-                <label className="text-subtle text-xs tracking-[0.1em] uppercase">Top K</label>
+                <label className="text-subtle text-xs tracking-widest uppercase">Top K</label>
                 <input
                   type="number"
                   id="top-k"
@@ -237,13 +237,13 @@ export default function RagPage() {
                   {results.length} Ranked Result{results.length !== 1 ? "s" : ""}
                 </SectionLabel>
 
-                <div className="space-y-3 overflow-y-auto max-h-[380px] pr-1">
+                <div className="space-y-3 overflow-y-auto max-h-95 pr-1">
                   {results.map((r, i) => (
                     <div
                       key={r.id}
                       className="p-4 rounded-lg border border-rim bg-[#0b0d14]/70 hover:border-gold/40 transition-colors"
                     >
-                      <div className="flex items-center justify-between text-xs tracking-[0.1em] text-subtle uppercase mb-2">
+                      <div className="flex items-center justify-between text-xs tracking-widest text-subtle uppercase mb-2">
                         <span className="font-bold text-fg">Rank #{i + 1}</span>
                         <span className="text-gold font-mono">rrf={r.rrf_score.toFixed(5)}</span>
                         <span className="font-mono text-[11px]">Chunk #{r.id}</span>
@@ -260,7 +260,7 @@ export default function RagPage() {
 
       {/* ── Footer ────────────────────────────────────────── */}
       <footer className="border-t border-rim py-5 bg-surface/40">
-        <div className="max-w-[1140px] mx-auto px-8 flex justify-between items-center text-xs text-subtle tracking-[0.06em]">
+        <div className="max-w-285 mx-auto px-8 flex justify-between items-center text-xs text-subtle tracking-[0.06em]">
           <span>Enterprise RAG · Query Workbench</span>
           <span>FastAPI · PostgreSQL · Gemini</span>
         </div>
@@ -297,7 +297,7 @@ function HealthIndicator() {
     <button
       onClick={check}
       title="Click to ping backend health"
-      className="inline-flex items-center gap-2 text-subtle text-xs tracking-[0.1em] uppercase
+      className="inline-flex items-center gap-2 text-subtle text-xs tracking-widest uppercase
                  bg-surface border border-rim px-3 py-1.5 rounded-md hover:text-fg hover:border-gold/40 transition-colors cursor-pointer"
     >
       <span className={`w-2 h-2 rounded-full pulse-dot ${dotColor}`} />

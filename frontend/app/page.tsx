@@ -3,11 +3,11 @@ import { Nav, SectionLabel } from "./components";
 
 export default function Home() {
   return (
-    <div className="relative z-[1] min-h-screen flex flex-col bg-bg text-fg font-sans">
+    <div className="relative z-1 min-h-screen flex flex-col bg-bg text-fg font-sans">
       <Nav active="home" />
 
       <main className="flex-1 pb-20">
-        <div className="max-w-[1140px] mx-auto px-8">
+        <div className="max-w-285 mx-auto px-8">
 
           {/* ── Hero Section ─────────────────────────────────── */}
           <section className="pt-24 pb-16 border-b border-rim">
@@ -16,12 +16,12 @@ export default function Home() {
               Enterprise Search & Decision Automation
             </div>
 
-            <h1 className="font-serif text-[3.75rem] leading-[1.08] mb-6 max-w-[720px] cursor">
+            <h1 className="font-serif text-[3.75rem] leading-[1.08] mb-6 max-w-180 cursor">
               Find what matters,<br />
               <em className="text-gold">act with intelligence.</em>
             </h1>
 
-            <p className="text-subtle text-base max-w-[600px] leading-[1.8] mb-10">
+            <p className="text-subtle text-base max-w-150 leading-[1.8] mb-10">
               A hybrid retrieval platform uniting dense vector embeddings and full-text keyword
               search via Reciprocal Rank Fusion. Power your company knowledge base and automate
               decisions with Gemini 2.5 Flash.
@@ -39,7 +39,7 @@ export default function Home() {
               <Link
                 href="/workflows"
                 className="inline-flex items-center gap-2 font-sans text-xs tracking-[0.12em] uppercase
-                           px-6 py-3 rounded-md border border-white/[0.12] text-fg bg-surface
+                           px-6 py-3 rounded-md border border-white/12 text-fg bg-surface
                            hover:border-gold hover:text-gold transition-all no-underline"
               >
                 Automations →
@@ -47,7 +47,7 @@ export default function Home() {
               <Link
                 href="/docs"
                 className="inline-flex items-center gap-2 font-sans text-xs tracking-[0.12em] uppercase
-                           px-6 py-3 rounded-md border border-white/[0.12] text-subtle bg-surface/50
+                           px-6 py-3 rounded-md border border-white/12 text-subtle bg-surface/50
                            hover:border-gold hover:text-gold transition-all no-underline"
               >
                 Explore API Docs →
@@ -74,7 +74,7 @@ export default function Home() {
                 desc: "RRF scoring (k=60) normalizes and fuses both retrieval candidate pools into a single calibrated ranking list.",
               },
             ].map(({ icon, title, desc }, i) => (
-              <div key={i} className="p-8 bg-surface/90 backdrop-blur-md transition-colors hover:bg-white/[0.02]">
+              <div key={i} className="p-8 bg-surface/90 backdrop-blur-md transition-colors hover:bg-white/2">
                 <div className="text-gold text-2xl mb-4">{icon}</div>
                 <div className="font-serif text-fg text-lg mb-2">{title}</div>
                 <div className="text-subtle text-sm leading-[1.7]">{desc}</div>
@@ -132,7 +132,7 @@ export default function Home() {
               ["4. FUSE",   "HNSW + GIN (RRF)"],
               ["5. REASON", "Gemini 2.5 Flash"],
             ].map(([title, sub], i) => (
-              <div key={i} className={`py-6 px-3 ${i < 4 ? "border-r border-rim" : ""} bg-white/[0.01]`}>
+              <div key={i} className={`py-6 px-3 ${i < 4 ? "border-r border-rim" : ""} bg-white/1`}>
                 <div className="font-serif text-fg text-sm mb-1">{title}</div>
                 <div className="text-subtle text-xs">{sub}</div>
               </div>
@@ -144,7 +144,7 @@ export default function Home() {
             <div className="flex gap-2 flex-wrap items-center">
               <span className="text-subtle text-xs mr-2">Powered by</span>
               {["FastAPI", "PostgreSQL", "pgvector", "Redis L1/L2", "Gemini 2.5 Flash", "Next.js 16"].map((t) => (
-                <span key={t} className="text-[11px] tracking-wider uppercase border border-white/[0.08] text-subtle px-3 py-1 rounded-md bg-surface/60">
+                <span key={t} className="text-[11px] tracking-wider uppercase border border-white/8 text-subtle px-3 py-1 rounded-md bg-surface/60">
                   {t}
                 </span>
               ))}
@@ -159,7 +159,7 @@ export default function Home() {
 
       {/* ── Footer ───────────────────────────────────────────── */}
       <footer className="border-t border-rim py-6 bg-surface/40">
-        <div className="max-w-[1140px] mx-auto px-8 flex justify-between items-center text-xs text-subtle tracking-[0.06em]">
+        <div className="max-w-285 mx-auto px-8 flex justify-between items-center text-xs text-subtle tracking-[0.06em]">
           <span>Enterprise RAG · Full-Stack Platform</span>
           <span>FastAPI · PostgreSQL · Redis · Gemini</span>
         </div>
