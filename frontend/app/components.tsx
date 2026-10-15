@@ -28,7 +28,12 @@ export function Nav({ active }: { active: "home" | "rag" | "ask" }) {
             </Link>
           </li>
           <li>
-            <a href="/api/docs" target="_blank" rel="noopener noreferrer" className={link}>
+            <a
+              href={`${process.env.NEXT_PUBLIC_BACKEND_URL || "http://localhost:8000"}/docs`}
+              target="_blank"
+              rel="noopener noreferrer"
+              className={link}
+            >
               API Docs
             </a>
           </li>

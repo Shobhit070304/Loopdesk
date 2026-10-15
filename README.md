@@ -24,7 +24,7 @@ It lets you ingest documents, search them with hybrid semantic + keyword search,
 **Key features:**
 - 📄 **Document ingestion** — text is chunked and embedded via `gemini-embedding-001`
 - 🔍 **Hybrid search** — vector similarity (HNSW) + full-text search (GIN), fused with Reciprocal Rank Fusion (RRF)
-- 🧠 **LLM answers** — top chunks are passed to `gemini-2.0-flash` as grounded context
+- 🧠 **LLM answers** — top chunks are passed to `gemini-2.5-flash` as grounded context
 - ⚡ **Semantic cache** — near-identical queries are served from cache (Redis + Postgres), skipping the LLM entirely
 
 ---
@@ -136,6 +136,8 @@ See [`frontend/.env.example`](./frontend/.env.example) for the full template.
 |---|---|---|
 | `GET` | `/health` | Health check |
 | `POST` | `/ingest` | Ingest a document (chunks + embeds it) |
+| `GET` | `/documents` | List ingested document chunks and stats |
+| `DELETE` | `/documents/{id}` | Delete a document chunk by ID |
 | `POST` | `/retrieve` | Hybrid search — returns ranked chunks |
 | `POST` | `/ask` | Full RAG pipeline — returns an LLM answer |
 

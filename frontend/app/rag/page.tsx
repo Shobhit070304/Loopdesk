@@ -249,7 +249,7 @@ export default function RagPage() {
         {/* ── Status bar ────────────────────────────────── */}
         <div className="border-t border-rim py-3 flex gap-6 items-center mt-0">
           <HealthIndicator />
-          <span className="text-subtle text-xs">Backend: localhost:8000 (proxied)</span>
+          <span className="text-subtle text-xs">Backend: {API || "http://localhost:8000"}</span>
         </div>
       </div>
 
@@ -270,7 +270,7 @@ function HealthIndicator() {
 
   async function check() {
     try {
-      const res  = await fetch("/api/health");
+      const res  = await fetch(`${API || "http://localhost:8000"}/health`);
       const data = await res.json();
       setStatus(data.status === "healthy" ? "healthy" : "error");
     } catch {

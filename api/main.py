@@ -24,7 +24,7 @@ load_dotenv()
 
 DB_URL = os.getenv("DB_URL")
 REDIS_URL = os.getenv("REDIS_URL")
-CORS_ORIGINS = [os.getenv("CORS_ORIGINS", "*")]
+CORS_ORIGINS = [os.getenv("CORS_ORIGINS", "http://localhost:3000")]
 
 @asynccontextmanager
 async def lifeSpan(app:FastAPI):
@@ -50,6 +50,11 @@ async def lifeSpan(app:FastAPI):
         await conn.execute("""
         CREATE INDEX IF NOT EXISTS idx_documents_embedding_fts
         ON documents USING hnsw (embedding vector_cosine_ops);
+        """)
+        # Add created_at column if it does not exist
+        await conn.execute("""
+            ALTER TABLE documents
+            ADD COLUMN IF NOT EXISTS created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW();
         """)
 
         # 2. Semantic Cache table
@@ -140,7 +145,7 @@ async def check_semantic_cache(app, query_embedding:list, threshold=0.95):
     return {"hit": False}
 
 async def save_to_cache(app, query_text:str, query_embedding:list, llm_response:str):
-    query_hash = hashlib.sha256(query_text.encode()).hexdigest()
+    query_hash = hashlib.sha256(query_text.strip().encode()).hexdigest()
     # query_embedding is already a plain list — no .values attribute
     query_vec_str = "[" + ",".join(map(str, query_embedding)) + "]"
 
@@ -149,7 +154,7 @@ async def save_to_cache(app, query_text:str, query_embedding:list, llm_response:
             INSERT INTO semantic_cache(query_hash, query_text, embedding, response) 
             VALUES($1, $2, $3::vector, $4)
             ON CONFLICT (query_hash) DO NOTHING;
-        """, query_hash, query_text, query_vec_str, llm_response)
+        """, query_hash, query_text.strip(), query_vec_str, llm_response)
 
     # Also cache in Redis for fast lookups (24h TTL)
     await app.state.redis.setex(f"cache:{query_hash}", 86400, llm_response)
@@ -178,6 +183,8 @@ async def health_check():
 async def ingest_document(request: IngestRequest):
     try:
         chunks = text_splitter.split_text(request.document_text)
+        if not chunks:
+            return {"message": "No text content found to ingest."}
 
         responses = client.models.embed_content(
             model="gemini-embedding-001",
@@ -185,16 +192,45 @@ async def ingest_document(request: IngestRequest):
             config={"output_dimensionality": 768}
         )
 
+        records = [
+            (chunk, "[" + ",".join(map(str, embedding.values)) + "]")
+            for chunk, embedding in zip(chunks, responses.embeddings)
+        ]
+
         async with app.state.pool.acquire() as conn:
-            for chunk, embedding in zip(chunks, responses.embeddings):
-                vec_str = "[" + ",".join(map(str, embedding.values)) + "]"
-                await conn.execute(
-                    "INSERT INTO documents (content, embedding) VALUES ($1, $2)", chunk, vec_str
-                )
+            await conn.executemany(
+                "INSERT INTO documents (content, embedding) VALUES ($1, $2::vector)",
+                records,
+            )
 
         return {"message": f"Successfully ingested {len(chunks)} chunks into the database."}
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Ingestion failed: {str(e)}")
+
+
+@app.get("/documents")
+async def list_documents(limit: int = 20, offset: int = 0):
+    async with app.state.pool.acquire() as conn:
+        total = await conn.fetchval("SELECT COUNT(*) FROM documents")
+        rows = await conn.fetch("""
+            SELECT id, LEFT(content, 120) AS snippet, created_at
+            FROM documents
+            ORDER BY id DESC
+            LIMIT $1 OFFSET $2
+        """, limit, offset)
+        return {
+            "total": total,
+            "documents": [dict(r) for r in rows]
+        }
+
+
+@app.delete("/documents/{doc_id}")
+async def delete_document(doc_id: int):
+    async with app.state.pool.acquire() as conn:
+        res = await conn.execute("DELETE FROM documents WHERE id = $1", doc_id)
+        if res == "DELETE 0":
+            raise HTTPException(status_code=404, detail="Document not found")
+        return {"message": f"Document {doc_id} deleted successfully"}
 
 
 async def _hybrid_search(query: str, top_k: int, raw_embedding: list = None):
@@ -239,7 +275,18 @@ async def retrieve_hybrid_search(request: QueryResult):
         
 @app.post("/ask")
 async def ask_rag(request:QueryResult):
-    # 1. Embed Query
+    # 1. L1 Exact-Match Cache Check (fast Redis lookup before embedding)
+    query_hash = hashlib.sha256(request.query.strip().encode()).hexdigest()
+    cached_response = await app.state.redis.get(f"cache:{query_hash}")
+    if cached_response:
+        return {
+            "query": request.query,
+            "answer": cached_response,
+            "source": "cache",
+            "similarity": 1.0,
+        }
+
+    # 2. Embed Query for L2 Semantic Cache & Retrieval
     try:
         query_embedding = client.models.embed_content(
             model="gemini-embedding-001",
@@ -250,7 +297,7 @@ async def ask_rag(request:QueryResult):
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Embedding failed: {str(e)}")
 
-    # 2. Semantic Cache Check
+    # 3. L2 Semantic Cache Check (pgvector cosine similarity >= 0.95)
     cache_result = await check_semantic_cache(app, raw_embedding, threshold=0.95)
     if cache_result["hit"]:
         return {
@@ -260,7 +307,7 @@ async def ask_rag(request:QueryResult):
             "similarity": cache_result["similarity"]
         }
 
-    # 3. Cache Miss - Hybrid Search (reuse precomputed embedding)
+    # 4. Cache Miss - Hybrid Search (reuse precomputed embedding)
     retrieval_result = await _hybrid_search(request.query, request.top_k, raw_embedding=raw_embedding)
     retrieved_docs = retrieval_result.get("results", [])
 
@@ -271,7 +318,7 @@ async def ask_rag(request:QueryResult):
             "source":"empty"
         }
 
-    # 4. Construct Prompt and Generate with Gemini
+    # 5. Construct Prompt and Generate with Gemini (gemini-2.5-flash)
     context_blocks = [item["content"] for item in retrieved_docs]
     context_text = "\n\n".join(context_blocks)
     
@@ -287,13 +334,13 @@ async def ask_rag(request:QueryResult):
 
     try:
         response = client.models.generate_content(
-            model="gemini-3.5-flash-lite",
+            model="gemini-2.5-flash",
             contents=[system_prompt]
         )
         generated_text = response.text
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"LLM generation failed: {str(e)}")
-    # 5. Cache the response
+    # 6. Cache the response (in Postgres and Redis)
     await save_to_cache(app, request.query, raw_embedding, generated_text)
     return {
         "query": request.query,

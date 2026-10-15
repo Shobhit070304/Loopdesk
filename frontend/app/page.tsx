@@ -32,7 +32,7 @@ export default function Home() {
                 Open Query Console →
               </Link>
               <a
-                href="/api/docs"
+                href={`${process.env.NEXT_PUBLIC_BACKEND_URL || "http://localhost:8000"}/docs`}
                 target="_blank"
                 rel="noopener noreferrer"
                 className="inline-flex items-center gap-2 font-sans text-sm tracking-[0.08em] uppercase
@@ -94,9 +94,11 @@ export default function Home() {
           <SectionLabel>API Endpoints</SectionLabel>
           <div className="flex flex-col gap-px">
             {[
-              { method: "GET",  path: "/health",   desc: "Health check — returns system status." },
-              { method: "POST", path: "/ingest",   desc: "Ingest raw text. Splits into chunks, embeds, and stores in pgvector." },
-              { method: "POST", path: "/retrieve", desc: "Hybrid search with top_k results via Reciprocal Rank Fusion." },
+              { method: "GET",  path: "/health",    desc: "Health check — returns system status." },
+              { method: "POST", path: "/ingest",    desc: "Ingest raw text. Splits into chunks, embeds, and stores in pgvector." },
+              { method: "GET",  path: "/documents", desc: "List ingested document chunks and total counts." },
+              { method: "POST", path: "/retrieve",  desc: "Hybrid search with top_k results via Reciprocal Rank Fusion." },
+              { method: "POST", path: "/ask",       desc: "Full RAG pipeline — cached retrieval and grounded LLM answers." },
             ].map(({ method, path, desc }) => (
               <div key={path} className="border border-rim bg-surface px-6 py-4 flex gap-4 items-start mb-px">
                 <span
