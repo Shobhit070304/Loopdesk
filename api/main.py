@@ -21,6 +21,10 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 # pyrefly: ignore [missing-import]
 import redis.asyncio as redis
 
+import io
+from fastapi import UploadFile, File
+import pypdf
+
 load_dotenv()
 
 DB_URL = os.getenv("DB_URL")
@@ -89,8 +93,13 @@ async def lifeSpan(app:FastAPI):
                 system_prompt TEXT NOT NULL,
                 action_type VARCHAR(50) DEFAULT 'webhook',
                 action_url TEXT,
+                require_approval BOOLEAN DEFAULT FALSE,
                 created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
             );
+        """)
+        await conn.execute("""
+            ALTER TABLE workflows
+            ADD COLUMN IF NOT EXISTS require_approval BOOLEAN DEFAULT FALSE;
         """)
 
         # 4. Workflow Execution History / Audit Trail
@@ -208,6 +217,7 @@ class WorkflowCreateRequest(BaseModel):
     )
     action_type: str = Field("webhook", description="Type of action: webhook, slack, or email")
     action_url: Optional[str] = Field(None, description="Destination URL for the action dispatch")
+    require_approval: bool = Field(False, description="Require human approval before dispatching action")
 
 class TriggerEventRequest(BaseModel):
     event_text: str = Field(..., description="The main text or summary to evaluate (e.g. customer message)")
@@ -248,6 +258,63 @@ async def ingest_document(request: IngestRequest):
         return {"message": f"Successfully ingested {len(chunks)} chunks into the database."}
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Ingestion failed: {str(e)}")
+
+
+@app.post("/ingest/file")
+async def ingest_file(file: UploadFile = File(...)):
+    filename = file.filename or "uploaded_file"
+    file_bytes = await file.read()
+    extracted_text = ""
+
+    # Extract text based on file format
+    if filename.lower().endswith(".pdf"):
+        try:
+            pdf_reader = pypdf.PdfReader(io.BytesIO(file_bytes))
+            pages_text = [page.extract_text() or "" for page in pdf_reader.pages]
+            extracted_text = "\n".join(pages_text).strip()
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=f"Failed to parse PDF: {str(e)}")
+    else:
+        # Fallback to plain UTF-8 text (.txt, .md, .csv, .json)
+        try:
+            extracted_text = file_bytes.decode("utf-8").strip()
+        except UnicodeDecodeError:
+            raise HTTPException(status_code=400, detail="File must be a valid UTF-8 text file or PDF.")
+
+    if not extracted_text:
+        raise HTTPException(status_code=400, detail="The uploaded file contains no readable text.")
+
+    # Reuse chunking & embedding pipeline
+    chunks = text_splitter.split_text(extracted_text)
+    if not chunks:
+        raise HTTPException(status_code=400, detail="No text chunks could be extracted from the file.")
+
+    try:
+        responses = client.models.embed_content(
+            model=EMBEDDING_MODEL,
+            contents=chunks,
+            config={"output_dimensionality": 768}
+        )
+
+        records = [
+            (chunk, "[" + ",".join(map(str, embedding.values)) + "]")
+            for chunk, embedding in zip(chunks, responses.embeddings)
+        ]
+        async with app.state.pool.acquire() as conn:
+            await conn.executemany(
+                "INSERT INTO documents (content, embedding) VALUES ($1, $2::vector)",
+                records,
+            )
+
+        return {
+            "filename": filename,
+            "message": f"Successfully ingested {len(chunks)} chunks from {filename}.",
+            "chunks_count": len(chunks),
+        }
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Ingestion failed: {str(e)}")
+
+
 
 
 @app.get("/documents")
@@ -397,10 +464,10 @@ async def ask_rag(request:QueryResult):
 async def create_workflow(req: WorkflowCreateRequest):
     async with app.state.pool.acquire() as conn:
         row = await conn.fetchrow("""
-            INSERT INTO workflows (name, description, system_prompt, action_type, action_url)
-            VALUES ($1, $2, $3, $4, $5)
-            RETURNING id, name, description, system_prompt, action_type, action_url, created_at;
-        """, req.name, req.description, req.system_prompt, req.action_type, req.action_url)
+            INSERT INTO workflows (name, description, system_prompt, action_type, action_url, require_approval)
+            VALUES ($1, $2, $3, $4, $5, $6)
+            RETURNING id, name, description, system_prompt, action_type, action_url, require_approval, created_at;
+        """, req.name, req.description, req.system_prompt, req.action_type, req.action_url, req.require_approval)
         return dict(row)
 
 
@@ -408,7 +475,7 @@ async def create_workflow(req: WorkflowCreateRequest):
 async def list_workflows():
     async with app.state.pool.acquire() as conn:
         rows = await conn.fetch("""
-            SELECT w.id, w.name, w.description, w.system_prompt, w.action_type, w.action_url, w.created_at,
+            SELECT w.id, w.name, w.description, w.system_prompt, w.action_type, w.action_url, w.require_approval, w.created_at,
                    COUNT(e.id)::int as execution_count
             FROM workflows w
             LEFT JOIN workflow_executions e ON w.id = e.workflow_id
@@ -481,32 +548,38 @@ async def trigger_workflow(workflow_id: int, event: TriggerEventRequest):
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"AI evaluation failed: {str(e)}")
 
-    # 4. Outbound Action Dispatch (HTTP Webhook / Slack)
-    action_status = "executed"
-    if wf["action_url"]:
-        try:
-            async with httpx.AsyncClient(timeout=5.0) as http_client:
-                await http_client.post(
-                    wf["action_url"],
-                    json={
-                        "workflow_id": workflow_id,
-                        "workflow_name": wf["name"],
-                        "decision": decision,
-                        "original_event": event.model_dump(),
-                    }
-                )
-        except Exception:
-            action_status = "action_dispatch_failed"
+    # 4. Outbound Action Dispatch (or hold in Approval Queue)
+    if wf.get("require_approval", False):
+        action_status = "pending_approval"
+    else:
+        action_status = "executed"
+        if wf["action_url"]:
+            try:
+                async with httpx.AsyncClient(timeout=5.0) as http_client:
+                    await http_client.post(
+                        wf["action_url"],
+                        json={
+                            "workflow_id": workflow_id,
+                            "workflow_name": wf["name"],
+                            "decision": decision,
+                            "original_event": event.model_dump(),
+                        }
+                    )
+            except Exception:
+                action_status = "action_dispatch_failed"
 
     # 5. Record in Audit Log
     async with app.state.pool.acquire() as conn:
-        await conn.execute("""
+        row = await conn.fetchrow("""
             INSERT INTO workflow_executions (workflow_id, trigger_payload, decision_output, status)
             VALUES ($1, $2::jsonb, $3::jsonb, $4)
+            RETURNING id
         """, workflow_id, json.dumps(event.model_dump()), json.dumps(decision), action_status)
+        execution_id = row["id"]
 
     return {
         "status": action_status,
+        "execution_id": execution_id,
         "workflow_id": workflow_id,
         "decision": decision,
         "referenced_docs_count": len(matched_chunks)
@@ -533,6 +606,52 @@ async def get_workflow_executions(workflow_id: int, limit: int = 20):
             }
             for r in rows
         ]
+
+
+@app.post("/workflows/executions/{execution_id}/approve")
+async def approve_execution(execution_id: int):
+    async with app.state.pool.acquire() as conn:
+        ex = await conn.fetchrow("""
+            SELECT e.*, w.action_url, w.name as workflow_name
+            FROM workflow_executions e
+            JOIN workflows w ON e.workflow_id = w.id
+            WHERE e.id = $1
+        """, execution_id)
+
+        if not ex:
+            raise HTTPException(status_code=404, detail="Execution not found")
+
+        decision = json.loads(ex["decision_output"]) if isinstance(ex["decision_output"], str) else ex["decision_output"]
+        trigger_payload = json.loads(ex["trigger_payload"]) if isinstance(ex["trigger_payload"], str) else ex["trigger_payload"]
+
+        # Dispatch action now that human approved
+        dispatch_status = "executed"
+        if ex["action_url"]:
+            try:
+                async with httpx.AsyncClient(timeout=5.0) as http_client:
+                    await http_client.post(
+                        ex["action_url"],
+                        json={
+                            "workflow_id": ex["workflow_id"],
+                            "workflow_name": ex["workflow_name"],
+                            "decision": decision,
+                            "original_event": trigger_payload,
+                        }
+                    )
+            except Exception:
+                dispatch_status = "action_dispatch_failed"
+
+        await conn.execute("UPDATE workflow_executions SET status = $1 WHERE id = $2", dispatch_status, execution_id)
+        return {"status": dispatch_status, "execution_id": execution_id}
+
+
+@app.post("/workflows/executions/{execution_id}/reject")
+async def reject_execution(execution_id: int):
+    async with app.state.pool.acquire() as conn:
+        res = await conn.execute("UPDATE workflow_executions SET status = 'rejected' WHERE id = $1", execution_id)
+        if res == "UPDATE 0":
+            raise HTTPException(status_code=404, detail="Execution not found")
+        return {"status": "rejected", "execution_id": execution_id}
 
 
 

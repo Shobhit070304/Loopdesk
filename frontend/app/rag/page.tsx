@@ -12,6 +12,10 @@ interface RetrieveResult {
 }
 
 export default function RagPage() {
+  const [ingestMode, setIngestMode] = useState<"file" | "text">("file");
+  const [file, setFile] = useState<File | null>(null);
+  const [fileLoading, setFileLoading] = useState(false);
+
   const [ingestText, setIngestText] = useState("");
   const [ingestLoading, setIngestLoading] = useState(false);
   const [ingestMsg, setIngestMsg] = useState<{ text: string; error?: boolean } | null>(null);
@@ -21,6 +25,35 @@ export default function RagPage() {
   const [queryLoading, setQueryLoading] = useState(false);
   const [results, setResults] = useState<RetrieveResult[] | null>(null);
   const [queryError, setQueryError] = useState<string | null>(null);
+
+  async function handleFileUpload() {
+    if (!file) return;
+    setFileLoading(true);
+    setIngestMsg(null);
+    const formData = new FormData();
+    formData.append("file", file);
+
+    try {
+      const res = await fetch(`${API}/ingest/file`, {
+        method: "POST",
+        body: formData,
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        const detail = data.detail;
+        const msg = Array.isArray(detail)
+          ? "Invalid input file."
+          : (detail ?? "File upload failed");
+        throw new Error(msg);
+      }
+      setIngestMsg({ text: data.message });
+      setFile(null);
+    } catch (e: unknown) {
+      setIngestMsg({ text: e instanceof Error ? e.message : "Unknown error", error: true });
+    } finally {
+      setFileLoading(false);
+    }
+  }
 
   async function handleIngest() {
     if (!ingestText.trim()) return;
@@ -116,32 +149,114 @@ export default function RagPage() {
           <div className="border border-rim rounded-xl bg-surface/80 p-8 backdrop-blur-md shadow-lg flex flex-col">
             <SectionLabel>1. Document Ingestion</SectionLabel>
 
-            <div className="flex flex-col gap-1.5 mb-5">
-              <label className="text-subtle text-xs tracking-widest uppercase">Document text</label>
-              <textarea
-                id="ingest-text"
-                rows={9}
-                className={inputCls}
-                placeholder="Paste your document or policy text here. It will be chunked (500 chars, 50 overlap), embedded via Gemini, and indexed in pgvector…"
-                value={ingestText}
-                onChange={(e) => setIngestText(e.target.value)}
-              />
+            {/* Ingestion Mode Selector */}
+            <div className="flex gap-2 mb-5">
+              <button
+                type="button"
+                onClick={() => setIngestMode("file")}
+                className={`text-xs uppercase tracking-wider px-3.5 py-1.5 rounded-md transition-all cursor-pointer ${
+                  ingestMode === "file"
+                    ? "bg-gold text-bg font-bold shadow-md shadow-gold/20"
+                    : "bg-surface border border-rim text-subtle hover:text-fg hover:border-gold/40"
+                }`}
+              >
+                Upload File (PDF / Text)
+              </button>
+              <button
+                type="button"
+                onClick={() => setIngestMode("text")}
+                className={`text-xs uppercase tracking-wider px-3.5 py-1.5 rounded-md transition-all cursor-pointer ${
+                  ingestMode === "text"
+                    ? "bg-gold text-bg font-bold shadow-md shadow-gold/20"
+                    : "bg-surface border border-rim text-subtle hover:text-fg hover:border-gold/40"
+                }`}
+              >
+                Paste Raw Text
+              </button>
             </div>
 
-            <div className="flex items-center gap-4">
-              <button
-                id="ingest-btn"
-                className={btnPrimary}
-                onClick={handleIngest}
-                disabled={ingestLoading || !ingestText.trim()}
-              >
-                {ingestLoading ? <span className="spinner" /> : null}
-                {ingestLoading ? "Indexing Chunks…" : "Ingest Document →"}
-              </button>
-              {ingestText.length > 0 && (
-                <span className="text-subtle text-xs font-mono">{ingestText.length} characters</span>
-              )}
-            </div>
+            {ingestMode === "file" ? (
+              <div className="flex flex-col gap-4 mb-5">
+                <label className="border-2 border-dashed border-rim hover:border-gold/50 rounded-xl p-8 text-center cursor-pointer transition-colors bg-[#080a10]/60 group block">
+                  <input
+                    type="file"
+                    accept=".pdf,.txt,.md,.csv,.json"
+                    className="hidden"
+                    onChange={(e) => setFile(e.target.files?.[0] || null)}
+                  />
+                  <div className="text-3xl text-gold mb-2 group-hover:scale-110 transition-transform">
+                    {file ? "📄" : "☁️"}
+                  </div>
+                  {file ? (
+                    <div>
+                      <p className="text-fg text-sm font-medium">{file.name}</p>
+                      <p className="text-subtle text-xs mt-1 font-mono">
+                        {(file.size / 1024).toFixed(1)} KB · Click to select another file
+                      </p>
+                    </div>
+                  ) : (
+                    <div>
+                      <p className="text-fg text-xs font-medium uppercase tracking-wider">
+                        Choose or drop PDF, TXT, or Markdown here
+                      </p>
+                      <p className="text-subtle text-[11px] mt-1">
+                        Extracts text, calculates 768-dim embeddings, and stores in pgvector
+                      </p>
+                    </div>
+                  )}
+                </label>
+
+                <div className="flex items-center gap-4">
+                  <button
+                    id="upload-file-btn"
+                    className={btnPrimary}
+                    onClick={handleFileUpload}
+                    disabled={fileLoading || !file}
+                  >
+                    {fileLoading ? <span className="spinner" /> : null}
+                    {fileLoading ? "Parsing & Indexing File…" : "Upload & Index File →"}
+                  </button>
+                  {file && (
+                    <button
+                      type="button"
+                      onClick={() => setFile(null)}
+                      className="text-subtle text-xs hover:text-danger uppercase tracking-wider cursor-pointer"
+                    >
+                      Clear
+                    </button>
+                  )}
+                </div>
+              </div>
+            ) : (
+              <div>
+                <div className="flex flex-col gap-1.5 mb-5">
+                  <label className="text-subtle text-xs tracking-widest uppercase">Document text</label>
+                  <textarea
+                    id="ingest-text"
+                    rows={9}
+                    className={inputCls}
+                    placeholder="Paste your document or policy text here. It will be chunked (500 chars, 50 overlap), embedded via Gemini, and indexed in pgvector…"
+                    value={ingestText}
+                    onChange={(e) => setIngestText(e.target.value)}
+                  />
+                </div>
+
+                <div className="flex items-center gap-4">
+                  <button
+                    id="ingest-btn"
+                    className={btnPrimary}
+                    onClick={handleIngest}
+                    disabled={ingestLoading || !ingestText.trim()}
+                  >
+                    {ingestLoading ? <span className="spinner" /> : null}
+                    {ingestLoading ? "Indexing Chunks…" : "Ingest Document →"}
+                  </button>
+                  {ingestText.length > 0 && (
+                    <span className="text-subtle text-xs font-mono">{ingestText.length} characters</span>
+                  )}
+                </div>
+              </div>
+            )}
 
             {ingestMsg && (
               <div

@@ -6,4 +6,6 @@ python-dotenv
 google-genai
 langchain-text-splitters
 pydantic
-httpx
+httpx
+pypdf>=4.0.0
+python-multipart>=0.0.9

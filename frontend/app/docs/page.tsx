@@ -54,6 +54,34 @@ const ENDPOINTS: EndpointDoc[] = [
     ),
   },
   {
+    id: "ingest-file",
+    category: "Ingestion",
+    method: "POST",
+    path: "/ingest/file",
+    title: "Upload & Parse Document File (PDF / Text)",
+    description:
+      "Upload a PDF, TXT, or Markdown document directly. The backend parses the file with pypdf, chunks the extracted text into 500-character segments, calculates embeddings, and indexes them in PostgreSQL.",
+    curlExample: `curl -X POST "${API_BASE}/ingest/file" \\
+  -F "file=@company_policy.pdf"`,
+    requestFields: [
+      {
+        name: "file",
+        type: "binary (multipart/form-data)",
+        required: true,
+        desc: "The file to upload (.pdf, .txt, .md, .csv).",
+      },
+    ],
+    responseBody: JSON.stringify(
+      {
+        filename: "company_policy.pdf",
+        message: "Successfully ingested 8 chunks from company_policy.pdf.",
+        chunks_count: 8,
+      },
+      null,
+      2
+    ),
+  },
+  {
     id: "list-docs",
     category: "Ingestion",
     method: "GET",
@@ -207,6 +235,7 @@ const ENDPOINTS: EndpointDoc[] = [
         system_prompt: "Evaluate if the customer request meets our 14-day return window.",
         action_type: "webhook",
         action_url: "https://your-crm.com/api/refunds",
+        require_approval: true,
       },
       null,
       2
@@ -236,6 +265,12 @@ const ENDPOINTS: EndpointDoc[] = [
         required: false,
         desc: "Destination URL where the decision payload will be automatically posted.",
       },
+      {
+        name: "require_approval",
+        type: "boolean",
+        required: false,
+        desc: "When true, holds outbound actions in the Approval Queue for human sign-off before dispatching.",
+      },
     ],
     responseBody: JSON.stringify(
       {
@@ -244,6 +279,7 @@ const ENDPOINTS: EndpointDoc[] = [
         description: "Validates incoming refund tickets against our store policies.",
         action_type: "webhook",
         action_url: "https://your-crm.com/api/refunds",
+        require_approval: true,
         created_at: "2026-10-15T11:00:00Z",
       },
       null,
@@ -296,6 +332,70 @@ const ENDPOINTS: EndpointDoc[] = [
           },
         },
         referenced_docs_count: 2,
+      },
+      null,
+      2
+    ),
+  },
+  {
+    id: "list-executions",
+    category: "Workflows",
+    method: "GET",
+    path: "/workflows/{id}/executions",
+    title: "List Workflow Execution History",
+    description:
+      "Retrieve the historical audit log of runs for a workflow, including event input snippets, Gemini decisions, reasoning, and dispatch statuses.",
+    curlExample: `curl -X GET "${API_BASE}/workflows/1/executions?limit=20"`,
+    responseBody: JSON.stringify(
+      [
+        {
+          id: 12,
+          trigger_payload: { event_text: "Customer request for refund within 5 days" },
+          decision_output: {
+            decision: "APPROVE",
+            confidence: 0.98,
+            reasoning: "Request meets store policy criteria.",
+            action_payload: { message: "Return authorized." },
+          },
+          status: "pending_approval",
+          executed_at: "2026-10-16T12:00:00Z",
+        },
+      ],
+      null,
+      2
+    ),
+  },
+  {
+    id: "approve-execution",
+    category: "Workflows",
+    method: "POST",
+    path: "/workflows/executions/{id}/approve",
+    title: "Approve Queued Execution (Human-in-the-Loop)",
+    description:
+      "Approve a held workflow execution. Immediately triggers the outbound action (webhook/alert) and updates status to executed.",
+    curlExample: `curl -X POST "${API_BASE}/workflows/executions/12/approve"`,
+    responseBody: JSON.stringify(
+      {
+        status: "executed",
+        execution_id: 12,
+      },
+      null,
+      2
+    ),
+  },
+  {
+    id: "reject-execution",
+    category: "Workflows",
+    method: "POST",
+    path: "/workflows/executions/{id}/reject",
+    title: "Reject Queued Execution",
+    description:
+      "Reject a held workflow execution. Halts outbound dispatch and logs the status as rejected in the audit trail.",
+    curlExample: `curl -X POST "${API_BASE}/workflows/executions/12/reject"`,
+    responseBody: JSON.stringify(
+      {
+        status: "rejected",
+        execution_id: 12,
       },
       null,
       2

@@ -12,6 +12,7 @@ interface Workflow {
   system_prompt: string;
   action_type: string;
   action_url?: string | null;
+  require_approval?: boolean;
   created_at: string;
   execution_count?: number;
 }
@@ -29,6 +30,7 @@ interface WorkflowDecision {
 
 interface TriggerResponse {
   status: string;
+  execution_id?: number;
   workflow_id: number;
   decision: WorkflowDecision;
   referenced_docs_count: number;
@@ -42,10 +44,69 @@ interface ExecutionRecord {
   executed_at: string;
 }
 
+interface WorkflowTemplate {
+  icon: string;
+  cleanName: string;
+  desc: string;
+  system_prompt: string;
+  action_type: "webhook" | "slack" | "email";
+  default_url?: string;
+  sample_event: string;
+  require_approval: boolean;
+}
+
+const WORKFLOW_TEMPLATES: WorkflowTemplate[] = [
+  {
+    icon: "💳",
+    cleanName: "Return Policy Triager",
+    desc: "Evaluates customer refund requests against warranty & return policies.",
+    system_prompt:
+      "Evaluate whether the customer's request qualifies for a refund or replacement based on our return window and condition guidelines. If eligible, output APPROVE with a courteous confirmation email draft. If ineligible, output REJECT explaining the exact policy reason.",
+    action_type: "webhook",
+    default_url: "https://httpbin.org/post",
+    sample_event: "Purchased leather boots 6 days ago (Order #49281). The stitching on the left heel came undone. Can I get a full refund or exchange?",
+    require_approval: true,
+  },
+  {
+    icon: "🚨",
+    cleanName: "Enterprise SLA Escalation",
+    desc: "Detects production outages or priority breaches and alerts on-call team.",
+    system_prompt:
+      "Detect if this ticket reports a critical service disruption, database outage, or breach of enterprise SLA guarantees. If yes, output ESCALATE with severity P1/P2 and an urgent summary. Otherwise, output REPLY with standard troubleshooting steps.",
+    action_type: "slack",
+    default_url: "https://hooks.slack.com/services/DEMO/WEBHOOK",
+    sample_event: "URGENT: Our production API endpoints are returning HTTP 504 Gateway Timeout across all regions. Our entire checkout is down.",
+    require_approval: false,
+  },
+  {
+    icon: "📄",
+    cleanName: "Contract Clause Validator",
+    desc: "Checks vendor agreements against legal liability limits & payment terms.",
+    system_prompt:
+      "Analyze the inbound contract snippet against our legal guidelines. Verify: 1) Liability cap does not exceed 1x annual fees, 2) Payment net terms are >= 30 days. If violated, output REJECT specifying the offending clause. If compliant, output APPROVE.",
+    action_type: "webhook",
+    default_url: "https://httpbin.org/post",
+    sample_event: "Section 8.2: In no event shall Supplier's total liability exceed 10x the total fees paid under this Agreement. Payment terms shall be Net 15 days from invoice date.",
+    require_approval: true,
+  },
+  {
+    icon: "💼",
+    cleanName: "HR Expense Approver",
+    desc: "Validates employee reimbursement claims against corporate spending rules.",
+    system_prompt:
+      "Check the expense claim description against our travel budget policy. Verify that single meals do not exceed allowable limits ($75) and receipts are mentioned. Output APPROVE or REJECT with a brief financial audit note.",
+    action_type: "email",
+    default_url: "",
+    sample_event: "Dinner with client at Bistro 42 while attending the NYC Tech Summit. Total bill: $64.50. Itemized receipt attached.",
+    require_approval: true,
+  },
+];
+
 export default function WorkflowsPage() {
   const [workflows, setWorkflows] = useState<Workflow[]>([]);
   const [selectedWf, setSelectedWf] = useState<Workflow | null>(null);
   const [executions, setExecutions] = useState<ExecutionRecord[]>([]);
+  const [activeTemplate, setActiveTemplate] = useState<string | null>(null);
 
   // Creation Form State
   const [name, setName] = useState("");
@@ -55,6 +116,7 @@ export default function WorkflowsPage() {
   );
   const [actionType, setActionType] = useState("webhook");
   const [actionUrl, setActionUrl] = useState("");
+  const [requireApproval, setRequireApproval] = useState(false);
   const [createLoading, setCreateLoading] = useState(false);
 
   // Trigger / Simulation State
@@ -127,6 +189,7 @@ export default function WorkflowsPage() {
           system_prompt: prompt.trim(),
           action_type: actionType,
           action_url: actionUrl.trim() || null,
+          require_approval: requireApproval,
         }),
       });
 
@@ -136,6 +199,8 @@ export default function WorkflowsPage() {
       setName("");
       setDescription("");
       setActionUrl("");
+      setRequireApproval(false);
+      setActiveTemplate(null);
       setSuccessMsg(`Workflow "${data.name}" created successfully.`);
       await fetchWorkflows();
       setSelectedWf(data);
@@ -143,6 +208,32 @@ export default function WorkflowsPage() {
       setErrorMsg(err instanceof Error ? err.message : "Creation failed");
     } finally {
       setCreateLoading(false);
+    }
+  }
+
+  async function handleApprove(executionId: number) {
+    try {
+      const res = await fetch(`${API}/workflows/executions/${executionId}/approve`, {
+        method: "POST",
+      });
+      if (!res.ok) throw new Error("Approval failed");
+      if (selectedWf) fetchExecutions(selectedWf.id);
+      setSuccessMsg(`Execution #${executionId} approved and action dispatched.`);
+    } catch (err: unknown) {
+      setErrorMsg(err instanceof Error ? err.message : "Approval failed");
+    }
+  }
+
+  async function handleReject(executionId: number) {
+    try {
+      const res = await fetch(`${API}/workflows/executions/${executionId}/reject`, {
+        method: "POST",
+      });
+      if (!res.ok) throw new Error("Rejection failed");
+      if (selectedWf) fetchExecutions(selectedWf.id);
+      setSuccessMsg(`Execution #${executionId} rejected.`);
+    } catch (err: unknown) {
+      setErrorMsg(err instanceof Error ? err.message : "Rejection failed");
     }
   }
 
@@ -268,6 +359,54 @@ export default function WorkflowsPage() {
               <SectionLabel>1. Define Automation Rule</SectionLabel>
 
               <form onSubmit={handleCreateWorkflow} className="space-y-4">
+                {/* ── 1-Click Workflow Presets ──────────────── */}
+                <div>
+                  <div className="flex justify-between items-center mb-2">
+                    <label className="text-subtle text-xs tracking-widest uppercase flex items-center gap-1.5 font-medium">
+                      <span>⚡ 1-Click Workflow Presets</span>
+                    </label>
+                    <span className="text-[11px] text-subtle font-mono">Instant setup</span>
+                  </div>
+                  <div className="grid grid-cols-2 gap-2 mb-4">
+                    {WORKFLOW_TEMPLATES.map((tpl) => {
+                      const isSelected = activeTemplate === tpl.cleanName;
+                      return (
+                        <button
+                          key={tpl.cleanName}
+                          type="button"
+                          onClick={() => {
+                            setActiveTemplate(tpl.cleanName);
+                            setName(tpl.cleanName);
+                            setDescription(tpl.desc);
+                            setPrompt(tpl.system_prompt);
+                            setActionType(tpl.action_type);
+                            setActionUrl(tpl.default_url || "");
+                            setRequireApproval(tpl.require_approval);
+                            setEventText(tpl.sample_event);
+                          }}
+                          className={`text-left p-2.5 rounded-lg border transition-all cursor-pointer ${
+                            isSelected
+                              ? "border-gold bg-gold/10 text-fg"
+                              : "border-rim bg-surface/50 hover:bg-surface hover:border-gold/40 text-subtle hover:text-fg"
+                          }`}
+                        >
+                          <div className="flex items-center justify-between">
+                            <span className="font-serif text-xs text-fg font-medium">
+                              {tpl.icon} {tpl.cleanName}
+                            </span>
+                            <span className="text-[9px] uppercase tracking-wider px-1.5 py-0.5 rounded border border-rim text-subtle bg-white/2">
+                              {tpl.action_type}
+                            </span>
+                          </div>
+                          <p className="text-subtle text-[11px] line-clamp-1 mt-1 leading-tight">
+                            {tpl.desc}
+                          </p>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+
                 <div>
                   <label className="block text-subtle text-xs tracking-widest uppercase mb-1">
                     Workflow Name *
@@ -338,6 +477,23 @@ export default function WorkflowsPage() {
                   </div>
                 </div>
 
+                {/* ── Require Human Review Toggle ── */}
+                <div className="flex items-start gap-3 p-3.5 rounded-lg border border-rim bg-[#080a10]/60">
+                  <input
+                    id="require-approval"
+                    type="checkbox"
+                    checked={requireApproval}
+                    onChange={(e) => setRequireApproval(e.target.checked)}
+                    className="mt-0.5 w-4 h-4 rounded border-rim text-gold accent-gold cursor-pointer"
+                  />
+                  <label htmlFor="require-approval" className="text-xs text-fg cursor-pointer select-none">
+                    <span className="font-medium text-gold">Require Human Approval (Approval Queue)</span>
+                    <span className="text-subtle block text-[11px] mt-0.5 leading-relaxed">
+                      AI decisions will be held in the Review Queue for human approval before outbound actions are dispatched.
+                    </span>
+                  </label>
+                </div>
+
                 <div className="pt-2">
                   <button type="submit" disabled={createLoading || !name.trim()} className={btnPrimary}>
                     {createLoading ? <span className="spinner" /> : null}
@@ -375,6 +531,11 @@ export default function WorkflowsPage() {
                             <span className="text-[10px] tracking-wider uppercase px-2 py-0.5 rounded border border-rim text-subtle bg-white/2">
                               {wf.action_type}
                             </span>
+                            {wf.require_approval && (
+                              <span className="text-[10px] tracking-wider uppercase px-2 py-0.5 rounded border border-amber-500/40 text-amber-400 bg-amber-500/10">
+                                Review Queue
+                              </span>
+                            )}
                           </div>
                           {wf.description && (
                             <p className="text-subtle text-xs truncate mt-1">{wf.description}</p>
@@ -414,9 +575,14 @@ export default function WorkflowsPage() {
 
               {selectedWf ? (
                 <div className="mb-4 text-xs border border-rim rounded-lg bg-[#0b0d14] p-3 flex justify-between items-center">
-                  <div>
-                    <span className="text-subtle uppercase tracking-widest mr-2">Target Workflow:</span>
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="text-subtle uppercase tracking-widest mr-1">Target Workflow:</span>
                     <span className="text-gold font-serif">{selectedWf.name}</span>
+                    {selectedWf.require_approval && (
+                      <span className="text-[10px] tracking-wider uppercase px-2 py-0.5 rounded border border-amber-500/40 text-amber-400 bg-amber-500/10 font-mono">
+                        Review Queue Active
+                      </span>
+                    )}
                   </div>
                   <span className="text-subtle text-[11px] font-mono">ID #{selectedWf.id}</span>
                 </div>
@@ -427,9 +593,27 @@ export default function WorkflowsPage() {
               )}
 
               <div className="space-y-3">
-                <label className="block text-subtle text-xs tracking-widest uppercase">
-                  Incoming Event Text (Ticket / Message / Claim)
-                </label>
+                <div className="flex justify-between items-center">
+                  <label className="block text-subtle text-xs tracking-widest uppercase">
+                    Incoming Event Text (Ticket / Message / Claim)
+                  </label>
+                  {selectedWf && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const matchingTpl = WORKFLOW_TEMPLATES.find((t) => t.cleanName === selectedWf.name);
+                        if (matchingTpl) {
+                          setEventText(matchingTpl.sample_event);
+                        } else {
+                          setEventText("Customer inquiry: Can you verify if our order qualifies under the standard return policy terms?");
+                        }
+                      }}
+                      className="text-[11px] text-gold hover:underline uppercase tracking-wider cursor-pointer font-mono"
+                    >
+                      Fill Sample Event ↵
+                    </button>
+                  )}
+                </div>
                 <textarea
                   rows={4}
                   value={eventText}
@@ -503,9 +687,13 @@ export default function WorkflowsPage() {
                 <div className="flex items-center justify-between text-xs text-subtle pt-2 border-t border-rim">
                   <span>Outbound Dispatch Status:</span>
                   <span
-                    className={`uppercase tracking-wider px-2 py-0.5 rounded border text-[11px] ${
+                    className={`uppercase tracking-wider px-2 py-0.5 rounded border text-[11px] font-mono ${
                       triggerResult.status === "executed"
                         ? "border-emerald-500/40 text-emerald-400 bg-emerald-500/10"
+                        : triggerResult.status === "pending_approval"
+                        ? "border-amber-500/40 text-amber-400 bg-amber-500/10 font-bold"
+                        : triggerResult.status === "rejected"
+                        ? "border-subtle/40 text-subtle bg-white/2"
                         : triggerResult.status === "action_dispatch_failed"
                         ? "border-danger/40 text-danger bg-danger/10"
                         : "border-rim text-subtle"
@@ -514,6 +702,48 @@ export default function WorkflowsPage() {
                     {triggerResult.status}
                   </span>
                 </div>
+
+                {/* ── Human-in-the-Loop Review Box ── */}
+                {triggerResult.status === "pending_approval" && (
+                  <div className="rounded-lg border border-amber-500/30 bg-amber-500/5 p-3.5 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs">
+                    <div>
+                      <span className="text-amber-400 font-bold tracking-wider uppercase block text-[11px]">
+                        ⏸ Action Held in Review Queue
+                      </span>
+                      <p className="text-subtle text-xs mt-0.5">
+                        This workflow requires human approval before outbound dispatch.
+                      </p>
+                    </div>
+                    {triggerResult.execution_id && (
+                      <div className="flex items-center gap-2 shrink-0">
+                        <button
+                          type="button"
+                          onClick={async () => {
+                            if (triggerResult.execution_id) {
+                              await handleApprove(triggerResult.execution_id);
+                              setTriggerResult((prev) => (prev ? { ...prev, status: "executed" } : null));
+                            }
+                          }}
+                          className="px-3 py-1.5 text-[11px] font-bold uppercase tracking-wider rounded bg-gold text-bg hover:bg-amber-400 transition-colors cursor-pointer shadow-sm"
+                        >
+                          Approve & Dispatch
+                        </button>
+                        <button
+                          type="button"
+                          onClick={async () => {
+                            if (triggerResult.execution_id) {
+                              await handleReject(triggerResult.execution_id);
+                              setTriggerResult((prev) => (prev ? { ...prev, status: "rejected" } : null));
+                            }
+                          }}
+                          className="px-3 py-1.5 text-[11px] font-bold uppercase tracking-wider rounded border border-danger/40 text-danger hover:bg-danger/10 transition-colors cursor-pointer"
+                        >
+                          Reject
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
             )}
           </div>
@@ -521,9 +751,17 @@ export default function WorkflowsPage() {
 
         {/* ── Historical Execution Audit Log ─────────────────────── */}
         <div className="mt-12 border border-rim rounded-xl bg-surface/80 p-7 backdrop-blur-md shadow-lg">
-          <SectionLabel>
-            Execution Audit Trail {selectedWf ? `— ${selectedWf.name}` : ""}
-          </SectionLabel>
+          <div className="flex justify-between items-center mb-3 flex-wrap gap-2">
+            <SectionLabel>
+              Execution Audit Trail {selectedWf ? `— ${selectedWf.name}` : ""}
+            </SectionLabel>
+            {executions.filter((e) => e.status === "pending_approval").length > 0 && (
+              <span className="text-[11px] uppercase tracking-wider font-bold px-2.5 py-1 rounded-full border border-amber-500/40 bg-amber-500/10 text-amber-400 flex items-center gap-1.5">
+                <span className="w-2 h-2 rounded-full bg-amber-400 animate-pulse" />
+                {executions.filter((e) => e.status === "pending_approval").length} Awaiting Approval
+              </span>
+            )}
+          </div>
 
           {executions.length === 0 ? (
             <p className="text-subtle text-xs leading-relaxed">
@@ -564,15 +802,39 @@ export default function WorkflowsPage() {
                         {ex.decision_output?.reasoning || "—"}
                       </td>
                       <td className="py-3 px-3">
-                        <span
-                          className={`text-[10px] uppercase tracking-wider px-2 py-0.5 rounded border ${
-                            ex.status === "executed"
-                              ? "border-emerald-500/40 text-emerald-400 bg-emerald-500/10"
-                              : "border-danger/40 text-danger bg-danger/10"
-                          }`}
-                        >
-                          {ex.status}
-                        </span>
+                        {ex.status === "pending_approval" ? (
+                          <div className="flex items-center gap-1.5 flex-wrap">
+                            <span className="text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded border border-amber-500/40 text-amber-400 bg-amber-500/10 font-bold">
+                              Pending
+                            </span>
+                            <button
+                              onClick={() => handleApprove(ex.id)}
+                              className="px-2 py-0.5 text-[10px] uppercase font-bold tracking-wider rounded bg-gold text-bg hover:bg-amber-400 transition-colors shadow-sm cursor-pointer"
+                              title="Approve & Dispatch"
+                            >
+                              Approve
+                            </button>
+                            <button
+                              onClick={() => handleReject(ex.id)}
+                              className="px-2 py-0.5 text-[10px] uppercase font-bold tracking-wider rounded border border-danger/40 text-danger hover:bg-danger/10 transition-colors cursor-pointer"
+                              title="Reject Execution"
+                            >
+                              Reject
+                            </button>
+                          </div>
+                        ) : (
+                          <span
+                            className={`text-[10px] uppercase tracking-wider px-2 py-0.5 rounded border ${
+                              ex.status === "executed"
+                                ? "border-emerald-500/40 text-emerald-400 bg-emerald-500/10"
+                                : ex.status === "rejected"
+                                ? "border-subtle/40 text-subtle bg-white/2"
+                                : "border-danger/40 text-danger bg-danger/10"
+                            }`}
+                          >
+                            {ex.status}
+                          </span>
+                        )}
                       </td>
                     </tr>
                   ))}
