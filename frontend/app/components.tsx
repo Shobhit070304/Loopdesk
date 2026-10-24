@@ -1,104 +1,104 @@
-import type { ReactNode } from "react";
+"use client";
+
 import Link from "next/link";
+import { usePathname } from "next/navigation";
+import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from "react";
+import { GoogleSignIn } from "./login/GoogleSignIn";
 
-/* ── Top Navigation Bar ───────────────────────────────────── */
-export function Nav({
-  active,
-}: {
-  active: "home" | "rag" | "ask" | "workflows" | "docs";
-}) {
-  const linkBase =
-    "text-subtle no-underline text-xs tracking-[0.16em] uppercase transition-all duration-200 hover:text-fg py-1.5 px-3 rounded-md";
+export type UserProfile = { sub: string; email: string; name: string; picture?: string };
+type AuthState = { user: UserProfile | null; loading: boolean; refresh: () => Promise<void> };
+const AuthContext = createContext<AuthState>({ user: null, loading: true, refresh: async () => {} });
 
+export function AuthProvider({ children }: { children: ReactNode }) {
+  const [user, setUser] = useState<UserProfile | null>(null);
+  const [loading, setLoading] = useState(true);
+  const refresh = useCallback(async () => {
+    try {
+      const response = await fetch("/api/auth/session", { cache: "no-store" });
+      const data = await response.json();
+      setUser(data.user ?? null);
+    } catch {
+      setUser(null);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+  useEffect(() => {
+    const timer = window.setTimeout(() => { void refresh(); }, 0);
+    return () => window.clearTimeout(timer);
+  }, [refresh]);
+  return <AuthContext.Provider value={{ user, loading, refresh }}>{children}</AuthContext.Provider>;
+}
+
+export function useAuth() { return useContext(AuthContext); }
+
+export function AppAccessBoundary({ children }: { children: ReactNode }) {
+  const pathname = usePathname();
+  const { user, loading } = useAuth();
+  const isPublic = pathname === "/" || pathname === "/login" || pathname === "/help";
+  if (isPublic) return <>{children}</>;
+  if (loading) return <div className="auth-loading"><span className="spinner" /> Preparing your workspace…</div>;
+  if (!user) return <main className="auth-wall"><div className="auth-wall-card"><BrandMark size={44} /><p className="eyebrow">Your customer workspace</p><h1>Good work starts with good context.</h1><p>Sign in to manage your documents, conversations, workflows and approvals in one calm workspace.</p><GoogleSignIn /><small>Secure sign-in powered by Google OAuth.</small></div></main>;
+  return <>{children}</>;
+}
+
+const navItems = [
+  { href: "/documents", label: "Documents" },
+  { href: "/ask", label: "AI assistant" },
+  { href: "/workflows", label: "Workflows" },
+  { href: "/approvals", label: "Review queue" },
+];
+
+export function BrandMark({ size = 32, className = "" }: { size?: number; className?: string }) {
   return (
-    <nav className="sticky top-0 z-50 backdrop-blur-md bg-bg/80 border-b border-rim py-3.5">
-      <div className="flex justify-between items-center max-w-285 mx-auto px-8">
-        <Link
-          href="/"
-          className="flex items-center gap-2.5 font-serif text-xl text-gold no-underline tracking-[0.08em] group"
-        >
-          <span>E·RAG</span>
-          <span className="text-[10px] font-sans font-normal tracking-widest uppercase border border-gold/40 text-gold px-1.5 py-0.5 rounded bg-gold/5">
-            SaaS
-          </span>
-        </Link>
-
-        <ul className="flex items-center gap-2 list-none m-0 p-0">
-          <li>
-            <Link
-              href="/"
-              className={`${linkBase} ${
-                active === "home"
-                  ? "text-fg bg-white/6 border border-white/8"
-                  : ""
-              }`}
-            >
-              Overview
-            </Link>
-          </li>
-          <li>
-            <Link
-              href="/rag"
-              className={`${linkBase} ${
-                active === "rag"
-                  ? "text-fg bg-white/6 border border-white/8"
-                  : ""
-              }`}
-            >
-              Query
-            </Link>
-          </li>
-          <li>
-            <Link
-              href="/ask"
-              className={`${linkBase} ${
-                active === "ask"
-                  ? "text-fg bg-white/6 border border-white/8"
-                  : ""
-              }`}
-            >
-              Ask
-            </Link>
-          </li>
-          <li>
-            <Link
-              href="/workflows"
-              className={`${linkBase} ${
-                active === "workflows"
-                  ? "text-fg bg-white/6 border border-white/8"
-                  : ""
-              }`}
-            >
-              Workflows
-            </Link>
-          </li>
-          <li>
-            <Link
-              href="/docs"
-              className={`${linkBase} ${
-                active === "docs"
-                  ? "text-fg bg-white/6 border border-white/8"
-                  : ""
-              }`}
-            >
-              Docs
-            </Link>
-          </li>
-        </ul>
-      </div>
-    </nav>
+    <span
+      className={`brand-mark ${className}`.trim()}
+      style={{
+        width: size,
+        height: size,
+        minWidth: size,
+        minHeight: size,
+      }}
+      aria-hidden="true"
+    >
+      <svg
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="2.3"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        style={{ width: Math.round(size * 0.54), height: Math.round(size * 0.54) }}
+      >
+        <path d="M12 12c-2-2.67-4-4-6-4a4 4 0 1 0 0 8c2 0 4-1.33 6-4Zm0 0c2 2.67 4 4 6 4a4 4 0 0 0 0-8c-2 0-4 1.33-6 4Z" />
+      </svg>
+    </span>
   );
 }
 
-/* ── Section Label with Refined Divider ────────────────────── */
-export function SectionLabel({ children }: { children: ReactNode }) {
+export function Nav({ active }: { active: "home" | "documents" | "ask" | "workflows" | "approvals" | "profile" | "help" }) {
+  const pathname = usePathname();
+  const { user } = useAuth();
   return (
-    <div className="flex items-center gap-3 mb-5">
-      <div className="w-1.5 h-1.5 rounded-full bg-gold/80" />
-      <span className="text-subtle text-xs tracking-[0.2em] uppercase whitespace-nowrap font-medium">
-        {children}
-      </span>
-      <div className="flex-1 h-px bg-linear-to-r from-rim via-rim/60 to-transparent" />
-    </div>
+    <header className="topbar">
+      <div className="topbar-inner">
+        <Link href="/" className="brand"><BrandMark /><span>Loop<span className="brand-light">desk</span></span></Link>
+        <nav className="main-nav" aria-label="Main navigation">
+          {(user ? navItems : [{ href: "/", label: "Product" }, { href: "/help", label: "How it works" }]).map((item) => (
+            <Link key={item.href} href={item.href} className={pathname === item.href || (active === "profile" && item.href === "/profile") ? "nav-link active" : "nav-link"}>{item.label}</Link>
+          ))}
+        </nav>
+        <div className="nav-actions">
+          {user ? <>
+            <Link href="/profile" className="user-chip" aria-label="Open profile">{user.picture ? <img className="user-photo" src={user.picture} alt="" referrerPolicy="no-referrer" /> : <span className="user-photo">{user.name.slice(0, 1).toUpperCase()}</span>}<b>{user.name.split(" ")[0]}</b></Link>
+            <form action="/api/auth/logout" method="post"><button className="sign-out-button" type="submit">Sign out</button></form>
+          </> : <Link href="/login" className="nav-cta">Sign in <span>↗</span></Link>}
+        </div>
+      </div>
+    </header>
   );
+}
+
+export function SectionLabel({ children }: { children: ReactNode }) {
+  return <div className="section-label"><span className="section-dot" /><span>{children}</span><i /></div>;
 }

@@ -4,6 +4,7 @@ asyncpg
 redis
 python-dotenv
 google-genai
+google-auth>=2.0.0
 langchain-text-splitters
 pydantic
 httpx

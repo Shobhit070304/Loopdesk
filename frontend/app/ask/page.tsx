@@ -1,336 +1,239 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
-import { Nav, SectionLabel } from "../components";
+import { useEffect, useRef, useState, type ReactNode } from "react";
+import { Nav, useAuth } from "../components";
 
-const API = process.env.NEXT_PUBLIC_BACKEND_URL || "http://localhost:8000";
+type SourceRef = { filename: string; chunk_id?: number };
+type Message = { role: "user" | "assistant"; content: string; source?: string; sources?: SourceRef[] };
+type Conversation = { id: string; title: string; messages: Message[]; updatedAt: number };
+const HISTORY_LIMIT = 40;
 
-interface AskResponse {
-  query: string;
-  answer: string;
-  source: "cache" | "documents_retrieved" | "empty";
-  similarity?: number;
-}
-
-interface HistoryEntry {
-  id: number;
-  query: string;
-  answer: string;
-  source: AskResponse["source"];
-  similarity?: number;
-  timestamp: Date;
-}
-
-/* ── Typewriter hook ───────────────────────────────────────── */
-function useTypewriter(text: string, speed = 10) {
-  const [displayed, setDisplayed] = useState("");
-  const [done, setDone] = useState(false);
-
-  useEffect(() => {
-    setDisplayed("");
-    setDone(false);
-    if (!text) return;
-    let i = 0;
-    const id = setInterval(() => {
-      i++;
-      setDisplayed(text.slice(0, i));
-      if (i >= text.length) {
-        clearInterval(id);
-        setDone(true);
-      }
-    }, speed);
-    return () => clearInterval(id);
-  }, [text, speed]);
-
-  return { displayed, done };
-}
-
-/* ── Source badge ──────────────────────────────────────────── */
-function SourceBadge({
-  source,
-  similarity,
-}: {
-  source: AskResponse["source"];
-  similarity?: number;
-}) {
-  if (source === "cache") {
-    return (
-      <span className="inline-flex items-center gap-1.5 text-[11px] tracking-widest uppercase border border-gold/40 text-gold px-2.5 py-0.5 rounded-full bg-gold/10">
-        <span className="w-1.5 h-1.5 rounded-full bg-gold pulse-dot" />
-        L1/L2 Cache Hit
-        {similarity !== undefined && (
-          <span className="text-gold/70 ml-1 font-mono">· {(similarity * 100).toFixed(0)}%</span>
-        )}
-      </span>
+function isConversation(value: unknown): value is Conversation {
+  if (!value || typeof value !== "object") return false;
+  const conversation = value as Partial<Conversation>;
+  return typeof conversation.id === "string" && typeof conversation.title === "string" &&
+    Array.isArray(conversation.messages) && conversation.messages.every((message) =>
+      !!message && (message.role === "user" || message.role === "assistant") && typeof message.content === "string"
     );
-  }
-  if (source === "documents_retrieved") {
-    return (
-      <span className="inline-flex items-center gap-1.5 text-[11px] tracking-widest uppercase border border-sky-500/40 text-sky-400 px-2.5 py-0.5 rounded-full bg-sky-500/10">
-        <span className="w-1.5 h-1.5 rounded-full bg-sky-400" />
-        Hybrid Retrieved
-      </span>
-    );
-  }
-  return (
-    <span className="inline-flex items-center gap-1.5 text-[11px] tracking-widest uppercase border border-danger/40 text-danger px-2.5 py-0.5 rounded-full bg-danger/10">
-      No Matching Docs
-    </span>
-  );
 }
 
-/* ── Single answer card ────────────────────────────────────── */
-function AnswerCard({ entry, animate }: { entry: HistoryEntry; animate: boolean }) {
-  const { displayed, done } = useTypewriter(animate ? entry.answer : "", 8);
-
-  const shownText = animate ? displayed : entry.answer;
-  const showCursor = animate && !done;
-
-  return (
-    <div className="border border-rim rounded-xl bg-surface/80 backdrop-blur-md overflow-hidden shadow-lg transition-all hover:border-gold/30">
-      {/* Card Header */}
-      <div className="flex items-center justify-between px-6 py-3.5 border-b border-rim bg-white/1">
-        <div className="flex items-center gap-3">
-          <span className="text-gold font-serif text-base">⊕</span>
-          <span className="text-fg text-sm font-medium leading-snug max-w-130 truncate" title={entry.query}>
-            {entry.query}
-          </span>
-        </div>
-        <div className="flex items-center gap-3 shrink-0">
-          <SourceBadge source={entry.source} similarity={entry.similarity} />
-          <span className="text-subtle text-xs font-mono">
-            {entry.timestamp.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
-          </span>
-        </div>
-      </div>
-
-      {/* Answer Body */}
-      <div className="px-6 py-5 bg-[#090b10]/40">
-        <p className="text-ink text-sm leading-[1.85] whitespace-pre-wrap">
-          {shownText}
-          {showCursor && <span className="text-gold animate-pulse">▌</span>}
-        </p>
-      </div>
-    </div>
-  );
-}
-
-/* ── Main Ask Page Component ───────────────────────────────── */
 export default function AskPage() {
-  const [query, setQuery] = useState("");
-  const [topK, setTopK] = useState(3);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [history, setHistory] = useState<HistoryEntry[]>([]);
-  const [latestId, setLatestId] = useState<number | null>(null);
+  const { user } = useAuth();
+  const [conversations, setConversations] = useState<Conversation[]>([]);
+  const [historyReady, setHistoryReady] = useState(false);
+  const [historyFor, setHistoryFor] = useState<string | null>(null);
+  const historyOwner = useRef<string | null>(null);
+  const [activeId, setActiveId] = useState<string | null>(null);
+  const [prompt, setPrompt] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const input = useRef<HTMLTextAreaElement>(null);
+  const bottom = useRef<HTMLDivElement>(null);
+  const accountConversations = historyFor === user?.sub ? conversations : [];
+  const activeConversation = accountConversations.find((conversation) => conversation.id === activeId);
+  const messages = activeConversation?.messages || [];
 
-  const bottomRef = useRef<HTMLDivElement>(null);
-  const inputRef = useRef<HTMLInputElement>(null);
-
-  // Scroll to latest answer
   useEffect(() => {
-    if (latestId !== null) {
-      setTimeout(() => bottomRef.current?.scrollIntoView({ behavior: "smooth" }), 80);
-    }
-  }, [latestId]);
-
-  async function handleAsk() {
-    const q = query.trim();
-    if (!q || loading) return;
-    setLoading(true);
-    setError(null);
-
+    if (!user?.sub) return;
+    historyOwner.current = null;
+    const key = `loopdesk:ask-history:${user.sub}`;
     try {
-      const res = await fetch(`${API}/ask`, {
+      const stored = window.localStorage.getItem(key);
+      const parsed: unknown = stored ? JSON.parse(stored) : [];
+      setConversations(Array.isArray(parsed) ? parsed.filter(isConversation).slice(0, HISTORY_LIMIT) : []);
+    } catch {
+      setConversations([]);
+    } finally {
+      setActiveId(null);
+      historyOwner.current = user.sub;
+      setHistoryFor(user.sub);
+      setHistoryReady(true);
+    }
+  }, [user?.sub]);
+
+  useEffect(() => {
+    if (!historyReady || !user?.sub || historyFor !== user.sub || historyOwner.current !== user.sub) return;
+    try {
+      const compact = conversations.slice(0, HISTORY_LIMIT).map((conversation) => ({
+        ...conversation,
+        messages: conversation.messages.slice(-200).map((message) => ({ ...message, content: message.content.slice(0, 20_000) })),
+      }));
+      window.localStorage.setItem(`loopdesk:ask-history:${user.sub}`, JSON.stringify(compact));
+    } catch {
+      setError("This browser could not save chat history. You can still continue this conversation.");
+    }
+  }, [conversations, historyFor, historyReady, user?.sub]);
+
+  useEffect(() => { bottom.current?.scrollIntoView({ behavior: "smooth" }); }, [messages, busy]);
+
+  function startNewChat() {
+    setActiveId(null);
+    setPrompt("");
+    setError("");
+    input.current?.focus();
+  }
+
+  async function sendMessage(value = prompt) {
+    const query = value.trim();
+    if (!query || busy) return;
+    const conversationId = activeId || `${Date.now()}`;
+    setActiveId(conversationId);
+    setPrompt("");
+    setError("");
+    setConversations((current) => {
+      const existing = current.find((conversation) => conversation.id === conversationId);
+      if (!existing) return [{ id: conversationId, title: query.slice(0, 48), messages: [{ role: "user" as const, content: query }], updatedAt: Date.now() }, ...current].slice(0, HISTORY_LIMIT);
+      return current.map((conversation) => conversation.id === conversationId
+        ? { ...conversation, updatedAt: Date.now(), messages: [...conversation.messages, { role: "user", content: query }] }
+        : conversation);
+    });
+    setBusy(true);
+    try {
+      const response = await fetch("/api/backend/ask", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ query: q, top_k: topK }),
+        body: JSON.stringify({ query }),
       });
-      const data: AskResponse = await res.json();
-      if (!res.ok) throw new Error((data as { detail?: string }).detail ?? "Request failed");
-
-      const entry: HistoryEntry = {
-        id: Date.now(),
-        query: data.query,
-        answer: data.answer,
-        source: data.source,
-        similarity: data.similarity,
-        timestamp: new Date(),
-      };
-      setHistory((prev) => [entry, ...prev]);
-      setLatestId(entry.id);
-      setQuery("");
-    } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : "Unknown error");
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.detail || "The assistant could not answer right now.");
+      setConversations((current) => current.map((conversation) => conversation.id === conversationId
+        ? { ...conversation, updatedAt: Date.now(), messages: [...conversation.messages, { role: "assistant", content: data.answer, source: data.source, sources: data.sources }] }
+        : conversation));
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "The assistant could not answer right now.");
     } finally {
-      setLoading(false);
-      setTimeout(() => inputRef.current?.focus(), 50);
+      setBusy(false);
+      input.current?.focus();
     }
   }
 
-  const inputCls =
-    "flex-1 bg-[#0b0d14] border border-rim rounded-lg text-fg font-sans text-sm px-4 py-3 outline-none " +
-    "transition-all focus:border-gold/60 focus:ring-1 focus:ring-gold/20 placeholder:text-subtle/50 leading-relaxed";
+  function composer(centered: boolean) {
+    return <form className={`chat-composer ${centered ? "centered" : ""}`} onSubmit={(event) => { event.preventDefault(); void sendMessage(); }}>
+      <textarea ref={input} rows={1} value={prompt} onChange={(event) => setPrompt(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void sendMessage(); } }} placeholder="Message Loopdesk" aria-label="Message Loopdesk" disabled={busy} />
+      <button type="submit" aria-label="Send message" disabled={busy || !prompt.trim()}>{busy ? <span className="spinner" /> : "↑"}</button>
+      <small>Loopdesk can make mistakes. Check important information.</small>
+    </form>;
+  }
 
-  const btnCls =
-    "inline-flex items-center justify-center gap-2 font-sans text-xs tracking-[0.12em] uppercase " +
-    "px-6 py-3 rounded-lg bg-gold text-bg font-bold shadow-md shadow-gold/20 hover:bg-amber-400 " +
-    "transition-all cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed shrink-0";
+  return <div className="product-shell"><Nav active="ask" /><div className="assistant-layout">
+    <aside className="assistant-sidebar" aria-label="Chat history">
+      <button className="assistant-new-chat" onClick={startNewChat}><span>＋</span> New chat</button>
+      <p className="assistant-sidebar-label">Recent</p>
+      <div className="assistant-chat-list">{accountConversations.map((conversation) => <button key={conversation.id} className={`assistant-chat-link ${conversation.id === activeId ? "selected" : ""}`} onClick={() => { setActiveId(conversation.id); setPrompt(""); setError(""); }} title={conversation.title}>{conversation.title}</button>)}</div>
+      <div className="assistant-sidebar-footer"><span className="assistant-sidebar-mark">✳</span><span><b>Loopdesk assistant</b><small>Grounded in your team’s context</small></span></div>
+    </aside>
 
-  return (
-    <div className="relative z-1 min-h-screen flex flex-col bg-bg text-fg font-sans">
-      <Nav active="ask" />
-
-      <div className="max-w-285 mx-auto px-8 w-full pt-10 flex-1 flex flex-col pb-16">
-        {/* ── Page Header ──────────────────────────────────── */}
-        <div className="border-b border-rim pb-6 mb-8 flex justify-between items-end flex-wrap gap-4">
-          <div>
-            <p className="text-subtle text-xs tracking-[0.22em] uppercase mb-2">AI Answer Engine</p>
-            <h1 className="font-serif text-[2.25rem] text-fg">
-              Ask your documents<em className="text-gold">,</em>
-            </h1>
-            <p className="text-subtle text-sm mt-2 max-w-150 leading-relaxed">
-              Sub-millisecond Redis exact caching, vector similarity caching, and Gemini 2.5 Flash
-              generates grounded answers without hallucination.
-            </p>
-          </div>
-
-          {/* Metrics bar */}
-          {history.length > 0 && (
-            <div className="flex gap-4 border border-rim rounded-lg bg-surface px-4 py-2 text-xs">
-              <StatPill label="Queries" value={history.length} />
-              <div className="w-px bg-rim" />
-              <StatPill
-                label="Cache Hits"
-                value={history.filter((h) => h.source === "cache").length}
-                highlight
-              />
-              <div className="w-px bg-rim" />
-              <StatPill
-                label="Retrieved"
-                value={history.filter((h) => h.source === "documents_retrieved").length}
-              />
-            </div>
-          )}
-        </div>
-
-        {/* ── Input Row ────────────────────────────────────── */}
-        <div className="flex gap-3 mb-4 items-center">
-          <input
-            ref={inputRef}
-            id="ask-input"
-            type="text"
-            className={inputCls}
-            placeholder="Ask a question about your ingested documents…"
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && handleAsk()}
-            disabled={loading}
-          />
-          <div className="flex items-center gap-2 border border-rim rounded-lg px-3 py-2 bg-[#0b0d14] shrink-0">
-            <label className="text-subtle text-[11px] tracking-wider uppercase">Top K</label>
-            <input
-              id="top-k"
-              type="number"
-              min={1}
-              max={10}
-              value={topK}
-              onChange={(e) => setTopK(Number(e.target.value))}
-              className="bg-transparent text-fg font-sans text-xs w-10 text-center outline-none"
-            />
-          </div>
-          <button
-            id="ask-btn"
-            className={btnCls}
-            onClick={handleAsk}
-            disabled={loading || !query.trim()}
-          >
-            {loading ? <span className="spinner" /> : null}
-            {loading ? "Thinking…" : "Ask Question →"}
-          </button>
-        </div>
-
-        {/* ── Error Banner ─────────────────────────────────── */}
-        {error && (
-          <div className="mb-4 text-xs px-4 py-3 rounded-lg border-l-2 border-danger bg-danger/5 text-danger">
-            {error}
-          </div>
-        )}
-
-        {/* ── Answer Feed ──────────────────────────────────── */}
-        <div className="flex-1 flex flex-col gap-4 pb-10 mt-4">
-          {/* Empty State */}
-          {history.length === 0 && !loading && (
-            <div className="border border-rim rounded-xl bg-surface/80 p-8 backdrop-blur-md shadow-lg flex flex-col items-start gap-6">
-              <SectionLabel>Architecture & Performance</SectionLabel>
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-px bg-rim w-full border border-rim rounded-lg overflow-hidden">
-                {[
-                  ["①", "Dual-Layer Cache", "Instant exact match in Redis, plus cosine similarity (≥95%) in pgvector."],
-                  ["②", "Hybrid Search", "HNSW cosine vector distance blended with GIN English full-text search via RRF."],
-                  ["③", "Gemini 2.5 Flash", "Strict zero-hallucination prompt synthesizes a clear, direct answer with citations."],
-                ].map(([num, title, desc]) => (
-                  <div key={title} className="bg-surface/90 p-6 space-y-2">
-                    <div className="text-gold text-base font-serif">{num}</div>
-                    <div className="text-fg text-sm font-medium">{title}</div>
-                    <div className="text-subtle text-xs leading-relaxed">{desc}</div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {/* Loading Skeleton */}
-          {loading && (
-            <div className="border border-rim rounded-xl bg-surface/80 p-6 backdrop-blur-md animate-pulse space-y-3">
-              <div className="flex items-center gap-3">
-                <span className="spinner" />
-                <span className="text-subtle text-xs tracking-wider uppercase">
-                  Processing Query & Searching Indices…
-                </span>
-              </div>
-              <div className="h-3 bg-white/6 rounded w-3/4 mt-4" />
-              <div className="h-3 bg-white/6 rounded w-1/2" />
-            </div>
-          )}
-
-          {/* Answer Cards */}
-          {history.map((entry) => (
-            <AnswerCard
-              key={entry.id}
-              entry={entry}
-              animate={entry.id === latestId}
-            />
-          ))}
-
-          <div ref={bottomRef} />
-        </div>
-      </div>
-
-      {/* ── Footer ───────────────────────────────────────────── */}
-      <footer className="border-t border-rim py-5 bg-surface/40">
-        <div className="max-w-285 mx-auto px-8 flex justify-between items-center text-xs text-subtle tracking-[0.06em]">
-          <span>Enterprise RAG · AI Answer Engine</span>
-          <span>Gemini 2.5 Flash · Redis · pgvector</span>
-        </div>
-      </footer>
-    </div>
-  );
+    <main className={`assistant-main ${messages.length === 0 ? "is-empty" : "has-messages"}`}>
+      {messages.length === 0 ? <div className="ask-empty-state"><div><p className="eyebrow">YOUR CUSTOMER WORKSPACE</p><h1>How can I help?</h1><p>Ask a question and get a thoughtful answer from your team’s knowledge.</p></div>{composer(true)}</div> : <>
+        <header className="assistant-chat-heading"><span>Loopdesk assistant</span><button onClick={startNewChat}>＋ New chat</button></header>
+        <section className="chat-thread" aria-live="polite">
+          {messages.map((message, index) => <article className={`chat-message ${message.role}`} key={`${activeId}-${index}`}>
+            <div className="chat-message-label">{message.role === "user" ? "You" : <><span className="assistant-message-mark">✳</span> Loopdesk</>}</div>
+            {message.role === "assistant" ? <MarkdownContent markdown={message.content} /> : <p>{message.content}</p>}
+            {message.role === "assistant" && message.source && <small className="chat-source">{message.source === "documents_retrieved" ? "Based on your documents" : message.source === "cache" ? "Quick answer" : "Assistant response"}</small>}
+            {message.role === "assistant" && message.sources?.length ? <div className="chat-source-list" aria-label="Sources">{message.sources.map((source, sourceIndex) => <span key={`${source.filename}-${sourceIndex}`}>Source {sourceIndex + 1}: {source.filename}</span>)}</div> : null}
+          </article>)}
+          {busy && <article className="chat-message assistant"><div className="chat-message-label"><span className="assistant-message-mark">✳</span> Loopdesk</div><p className="thinking-indicator"><span className="spinner" /> Thinking…</p></article>}
+          {error && <p className="inline-error" role="alert">{error}</p>}
+          <div ref={bottom} />
+        </section>
+        {composer(false)}
+      </>}
+    </main>
+  </div></div>;
 }
 
-/* ── Small Stat Pill ───────────────────────────────────────── */
-function StatPill({
-  label,
-  value,
-  highlight = false,
-}: {
-  label: string;
-  value: number;
-  highlight?: boolean;
-}) {
-  return (
-    <div className="flex items-center gap-1.5">
-      <span className={`text-xs font-serif ${highlight ? "text-gold font-bold" : "text-fg"}`}>{value}</span>
-      <span className="text-subtle text-[11px] uppercase tracking-wider">{label}</span>
-    </div>
-  );
+function MarkdownContent({ markdown }: { markdown: string }) {
+  const lines = markdown.replaceAll("\r\n", "\n").split("\n");
+  const blocks: ReactNode[] = [];
+  let index = 0;
+  while (index < lines.length) {
+    const line = lines[index];
+    if (!line.trim()) { index += 1; continue; }
+
+    const fence = line.match(/^\s*(```+|~~~+)([^ ]*)?.*$/);
+    if (fence) {
+      const codeLines: string[] = [];
+      index += 1;
+      while (index < lines.length && !new RegExp(`^\\s*${fence[1][0]}{${fence[1].length},}\\s*$`).test(lines[index])) codeLines.push(lines[index++]);
+      if (index < lines.length) index += 1;
+      blocks.push(<pre className="markdown-code" key={`code-${index}`}><code data-language={fence[2] || undefined}>{codeLines.join("\n")}</code></pre>);
+      continue;
+    }
+
+    const heading = line.match(/^(#{1,6})\s+(.+)$/);
+    if (heading) {
+      const level = heading[1].length;
+      blocks.push(<MarkdownHeading key={`heading-${index}`} level={level}>{renderInline(heading[2])}</MarkdownHeading>);
+      index += 1;
+      continue;
+    }
+
+    if (/^\s*(?:[-*_]\s*){3,}$/.test(line)) { blocks.push(<hr key={`rule-${index}`} />); index += 1; continue; }
+
+    if (/^\s*>/.test(line)) {
+      const quote: string[] = [];
+      while (index < lines.length && /^\s*>/.test(lines[index])) quote.push(lines[index++].replace(/^\s*>\s?/, ""));
+      blocks.push(<blockquote key={`quote-${index}`}>{quote.map((text, row) => <p key={row}>{renderInline(text)}</p>)}</blockquote>);
+      continue;
+    }
+
+    const listMatch = line.match(/^\s*([-*+]\s+|\d+[.)]\s+)/);
+    if (listMatch) {
+      const ordered = /^\d/.test(listMatch[1]);
+      const listItems: ReactNode[] = [];
+      while (index < lines.length) {
+        const item = lines[index].match(/^\s*([-*+]\s+|\d+[.)]\s+)(.+)$/);
+        if (!item || /^\d/.test(item[1]) !== ordered) break;
+        listItems.push(<li key={`item-${index}`}>{renderInline(item[2])}</li>);
+        index += 1;
+      }
+      blocks.push(ordered ? <ol key={`list-${index}`}>{listItems}</ol> : <ul key={`list-${index}`}>{listItems}</ul>);
+      continue;
+    }
+
+    if (line.includes("|") && index + 1 < lines.length && /^\s*\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)+\|?\s*$/.test(lines[index + 1])) {
+      const cells = (row: string) => row.trim().replace(/^\||\|$/g, "").split("|").map((cell) => cell.trim());
+      const headers = cells(line);
+      index += 2;
+      const rows: string[][] = [];
+      while (index < lines.length && lines[index].includes("|")) rows.push(cells(lines[index++]));
+      blocks.push(<div className="markdown-table-wrap" key={`table-${index}`}><table><thead><tr>{headers.map((cell, cellIndex) => <th key={cellIndex}>{renderInline(cell)}</th>)}</tr></thead><tbody>{rows.map((row, rowIndex) => <tr key={rowIndex}>{headers.map((_, cellIndex) => <td key={cellIndex}>{renderInline(row[cellIndex] || "")}</td>)}</tr>)}</tbody></table></div>);
+      continue;
+    }
+
+    const paragraph = [line];
+    index += 1;
+    while (index < lines.length && lines[index].trim() && !/^(#{1,6})\s|^\s*>|^\s*([-*+]\s+|\d+[.)]\s+)|^\s*(```+|~~~+)/.test(lines[index])) paragraph.push(lines[index++]);
+    blocks.push(<p key={`paragraph-${index}`}>{paragraph.map((text, row) => <span key={row}>{row > 0 && <br />}{renderInline(text)}</span>)}</p>);
+  }
+  return <div className="markdown-content">{blocks}</div>;
+}
+
+function MarkdownHeading({ level, children }: { level: number; children: ReactNode }) {
+  switch (level) {
+    case 1: return <h1>{children}</h1>;
+    case 2: return <h2>{children}</h2>;
+    case 3: return <h3>{children}</h3>;
+    case 4: return <h4>{children}</h4>;
+    case 5: return <h5>{children}</h5>;
+    default: return <h6>{children}</h6>;
+  }
+}
+
+function renderInline(text: string): ReactNode[] {
+  const pattern = /(\*\*[^*]+\*\*|__[^_]+__|~~[^~]+~~|\*[^*]+\*|_[^_]+_|`[^`]+`|\[[^\]]+\]\([^)]+\))/g;
+  return text.split(pattern).filter(Boolean).map((part, index) => {
+    if ((part.startsWith("**") && part.endsWith("**")) || (part.startsWith("__") && part.endsWith("__"))) return <strong key={index}>{part.slice(2, -2)}</strong>;
+    if (part.startsWith("~~") && part.endsWith("~~")) return <del key={index}>{part.slice(2, -2)}</del>;
+    if ((part.startsWith("*") && part.endsWith("*")) || (part.startsWith("_") && part.endsWith("_"))) return <em key={index}>{part.slice(1, -1)}</em>;
+    if (part.startsWith("`") && part.endsWith("`")) return <code key={index}>{part.slice(1, -1)}</code>;
+    const link = part.match(/^\[([^\]]+)\]\(([^)]+)\)$/);
+    if (link) {
+      const href = link[2].trim();
+      const safe = /^(https?:\/\/|mailto:|\/(?!\/)|#)/i.test(href);
+      return safe ? <a key={index} href={href} target={/^https?:\/\//i.test(href) ? "_blank" : undefined} rel="noreferrer">{link[1]}</a> : link[1];
+    }
+    return part;
+  });
 }
