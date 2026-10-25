@@ -186,11 +186,6 @@ async def lifeSpan(app:FastAPI):
         migration_applied = await conn.fetchval("SELECT 1 FROM schema_migrations WHERE version = '001_customer_workspace'")
         if not migration_applied:
             await conn.execute(migration_path.read_text(encoding="utf-8"))
-        legacy_workspace_id = os.getenv("LEGACY_WORKSPACE_ID", "").strip()
-        if legacy_workspace_id:
-            await conn.execute("UPDATE documents SET workspace_id = $1 WHERE workspace_id IS NULL", legacy_workspace_id)
-            await conn.execute("UPDATE workflows SET workspace_id = $1 WHERE workspace_id IS NULL", legacy_workspace_id)
-            await conn.execute("UPDATE semantic_cache SET workspace_id = $1 WHERE workspace_id IS NULL", legacy_workspace_id)
     yield
 
     await app.state.pool.close()
@@ -1198,7 +1193,7 @@ async def handle_inbound_webhook(webhook_token: str, request: Request):
             rate = await app.state.redis.incr(rate_key)
             if rate == 1:
                 await app.state.redis.expire(rate_key, 120)
-            if rate > int(os.getenv("WEBHOOK_RATE_LIMIT_PER_MINUTE", "300")):
+            if rate > int(os.getenv("WEBHOOK_RATE_LIMIT_PER_MINUTE", "50")):
                 raise HTTPException(status_code=429, detail="Webhook rate limit exceeded. Retry shortly.")
         except HTTPException:
             raise

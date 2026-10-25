@@ -70,10 +70,9 @@ The backend applies the base schema and the versioned SQL migration at startup. 
 | `AUTH_SECRET` | Random session signing secret; must match the frontend value and be at least 32 characters |
 | `CORS_ORIGINS` | Comma-separated allowed frontend origins |
 | `ENVIRONMENT` | Set to `production` to require HTTPS for outbound actions |
-| `LEGACY_WORKSPACE_ID` | Optional Google `sub` to assign unowned legacy documents, workflows and cache rows during migration |
-| `WEBHOOK_RATE_LIMIT_PER_MINUTE` | Optional per-workflow inbound event limit (default `300`) |
+| `WEBHOOK_RATE_LIMIT_PER_MINUTE` | Optional per-workflow inbound event limit (default `50`) |
 | `EMBEDDING_MODEL` | Optional embedding model override (default `text-embedding-004`) |
-| `LLM_MODEL` | Optional generation model override (default `gemini-1.5-flash`) |
+| `LLM_MODEL` | Optional generation model override (default `gemini-2.5-flash`) |
 
 ### Next.js (`frontend/.env.local`)
 
@@ -90,13 +89,7 @@ The backend applies the base schema and the versioned SQL migration at startup. 
 - **Workflow Events**: **50 customer events a day** combined across all workflows for an account (`/api/webhooks/{token}`, `/workflows/{id}/trigger`, `/workflows/{id}/webhook/test`). Maximum 1 MB payload, 10,000 characters event text.
 - **Workflow creation**: Maximum **10 workflows** per account. Name (2–100 chars), description (max 255 chars), instructions prompt (max 10,000 chars).
 - **Next.js API proxy**: 20 MB maximum request body on backend proxy routes.
-- **Inbound webhooks**: Requires non-empty valid JSON payload (`{}` or empty collections rejected with 422). Optional HMAC signature or secret verification.
-
-## Existing database migration
-
-The workspace migration adds ownership columns but does not guess which account owns existing global documents or workflows. Those records remain stored but are hidden from account-scoped requests until assigned.
-
-For a single-account legacy install, identify the intended Google account's `google_sub` in the `users` table, set that value as `LEGACY_WORKSPACE_ID` on the API service, and restart the backend. The migration assigns only rows whose workspace is still empty. Review the account and database backup before doing this on production data. Do not set this value when old records belong to multiple customers; assign those records with a deliberate tenant migration first.
+- **Inbound webhooks**: Requires non-empty valid JSON payload (`{}` or empty collections rejected with 422). Rate limited to 50 requests/min per workflow. Optional HMAC signature or secret verification.
 
 ## Deployment checklist
 
