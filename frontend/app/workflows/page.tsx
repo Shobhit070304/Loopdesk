@@ -21,7 +21,17 @@ async function readApiResponse<T>(response: Response, action: string): Promise<T
     const detail = data && typeof data === "object" && "detail" in data
       ? (data as { detail?: unknown }).detail
       : null;
-    throw new Error(typeof detail === "string" ? detail : `Could not ${action} (HTTP ${response.status}).`);
+    let message: string;
+    if (typeof detail === "string") {
+      message = detail;
+    } else if (Array.isArray(detail)) {
+      message = detail.map((err) => (typeof err === "object" && err && "msg" in err ? String(err.msg) : JSON.stringify(err))).join("; ");
+    } else if (detail) {
+      message = JSON.stringify(detail);
+    } else {
+      message = `Could not ${action} (HTTP ${response.status}).`;
+    }
+    throw new Error(message);
   }
   return data as T;
 }
@@ -319,6 +329,8 @@ export default function WorkflowsPage() {
                 Workflow name
                 <input
                   required
+                  minLength={2}
+                  maxLength={100}
                   value={name}
                   onChange={(event) => setName(event.target.value)}
                   placeholder="e.g. Refund request review"
@@ -327,6 +339,7 @@ export default function WorkflowsPage() {
               <label>
                 Short description
                 <input
+                  maxLength={255}
                   value={description}
                   onChange={(event) => setDescription(event.target.value)}
                   placeholder="What should this workflow handle?"
@@ -337,6 +350,7 @@ export default function WorkflowsPage() {
                 <textarea
                   required
                   rows={5}
+                  maxLength={10000}
                   value={prompt}
                   onChange={(event) => setPrompt(event.target.value)}
                   placeholder="Describe how to evaluate an incoming request…"
@@ -483,6 +497,7 @@ export default function WorkflowsPage() {
                               <input
                                 className="webhook-field-input"
                                 readOnly
+                                suppressHydrationWarning
                                 value={fullWebhookUrl || "Generating endpoint…"}
                               />
                               <button

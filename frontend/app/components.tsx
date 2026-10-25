@@ -90,7 +90,7 @@ export function Nav({ active }: { active: "home" | "documents" | "ask" | "workfl
         </nav>
         <div className="nav-actions">
           {user ? <>
-            <Link href="/profile" className="user-chip" aria-label="Open profile">{user.picture ? <img className="user-photo" src={user.picture} alt="" referrerPolicy="no-referrer" /> : <span className="user-photo">{user.name.slice(0, 1).toUpperCase()}</span>}<b>{user.name.split(" ")[0]}</b></Link>
+            <Link href="/profile" className="user-chip" aria-label="Open profile">{user.picture ? <img className="user-photo" src={user.picture} alt="" referrerPolicy="no-referrer" /> : <span className="user-photo">{(user.name || user.email || "U").slice(0, 1).toUpperCase()}</span>}<b>{(user.name || user.email || "User").split(" ")[0]}</b></Link>
             <form action="/api/auth/logout" method="post"><button className="sign-out-button" type="submit">Sign out</button></form>
           </> : <Link href="/login" className="nav-cta">Sign in <span>↗</span></Link>}
         </div>

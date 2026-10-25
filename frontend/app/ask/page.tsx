@@ -76,6 +76,10 @@ export default function AskPage() {
   async function sendMessage(value = prompt) {
     const query = value.trim();
     if (!query || busy) return;
+    if (query.length > 1000) {
+      setError("Questions must be 1,000 characters or fewer.");
+      return;
+    }
     const conversationId = activeId || `${Date.now()}`;
     setActiveId(conversationId);
     setPrompt("");
@@ -95,7 +99,10 @@ export default function AskPage() {
         body: JSON.stringify({ query }),
       });
       const data = await response.json();
-      if (!response.ok) throw new Error(data.detail || "The assistant could not answer right now.");
+      if (!response.ok) {
+        const errorMsg = typeof data.detail === "string" ? data.detail : Array.isArray(data.detail) ? data.detail.map((d: any) => d.msg || JSON.stringify(d)).join("; ") : "The assistant could not answer right now.";
+        throw new Error(errorMsg);
+      }
       setConversations((current) => current.map((conversation) => conversation.id === conversationId
         ? { ...conversation, updatedAt: Date.now(), messages: [...conversation.messages, { role: "assistant", content: data.answer, source: data.source, sources: data.sources }] }
         : conversation));
@@ -109,7 +116,7 @@ export default function AskPage() {
 
   function composer(centered: boolean) {
     return <form className={`chat-composer ${centered ? "centered" : ""}`} onSubmit={(event) => { event.preventDefault(); void sendMessage(); }}>
-      <textarea ref={input} rows={1} value={prompt} onChange={(event) => setPrompt(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void sendMessage(); } }} placeholder="Message Loopdesk" aria-label="Message Loopdesk" disabled={busy} />
+      <textarea ref={input} rows={1} maxLength={1000} value={prompt} onChange={(event) => setPrompt(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void sendMessage(); } }} placeholder="Message Loopdesk" aria-label="Message Loopdesk" disabled={busy} />
       <button type="submit" aria-label="Send message" disabled={busy || !prompt.trim()}>{busy ? <span className="spinner" /> : "↑"}</button>
       <small>Loopdesk can make mistakes. Check important information.</small>
     </form>;

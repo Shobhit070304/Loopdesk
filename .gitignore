@@ -6,11 +6,14 @@
 # Python virtual environment
 venv/
 .venv/
+api/venv/
+api/.venv/
 env/
 ENV/
 
 # Python cache & bytecode
 __pycache__/
+api/**/__pycache__/
 *.py[cod]
 *$py.class
 *.so
@@ -18,6 +21,7 @@ __pycache__/
 # Build & packaging
 build/
 dist/
+output/
 *.egg-info/
 .eggs/
 
@@ -39,11 +43,13 @@ Thumbs.db
 # Logs
 *.log
 
-# Next.js
+# Next.js & TypeScript
 frontend/.next/
 frontend/out/
 frontend/.turbopack/
 frontend/.next/cache/
+*.tsbuildinfo
+frontend/tsconfig.tsbuildinfo
 
 # Next.js build output & type generation
 frontend/next-env.d.ts

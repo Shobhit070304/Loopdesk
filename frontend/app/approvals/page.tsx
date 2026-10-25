@@ -5,7 +5,7 @@ import { Nav } from "../components";
 
 const API = "/api/backend";
 
-type RunStatus = "all" | "approved" | "rejected" | "pending";
+type RunStatus = "all" | "approved" | "rejected" | "pending" | "failed";
 
 type Execution = {
   id: number;
@@ -32,19 +32,19 @@ const filters: { id: RunStatus; label: string }[] = [
   { id: "pending", label: "Pending" },
   { id: "approved", label: "Accepted" },
   { id: "rejected", label: "Rejected" },
+  { id: "failed", label: "Action failed" },
 ];
 
-function category(status: string, rawDecision?: string): Exclude<RunStatus, "all"> | "failed" | "other" {
+function category(status: string, rawDecision?: string): Exclude<RunStatus, "all"> | "other" {
   if (status === "pending_approval" || status === "pending_review") return "pending";
   if (status === "rejected") return "rejected";
   if (status === "approved" || status === "executed") return "approved";
+  if (status.includes("failed")) return "failed";
   if (status === "auto_executed" || status === "auto_completed") {
     const decision = (rawDecision || "").toUpperCase();
     if (decision === "REJECT") return "rejected";
-    if (decision === "APPROVE" || decision === "REPLY") return "approved";
-    return "pending";
+    return "approved";
   }
-  if (status.includes("failed")) return "failed";
   return "other";
 }
 
@@ -485,7 +485,7 @@ export default function ApprovalsPage() {
                     disabled={busyId === selectedItem.id}
                     onClick={() => void decide(selectedItem.id, "reject")}
                   >
-                    ✕ Reject Request
+                    {busyId === selectedItem.id && busyAction === "reject" ? "Rejecting…" : "✕ Reject Request"}
                   </button>
                   <button
                     className="drawer-btn approve"

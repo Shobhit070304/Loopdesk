@@ -10,6 +10,11 @@ async function forward(request: NextRequest, context: RouteContext) {
   const token = cookieStore.get(SESSION_COOKIE)?.value;
   if (!readSessionToken(token)) return Response.json({ detail: "Sign in to use your workspace." }, { status: 401 });
 
+  const contentLength = Number(request.headers.get("content-length") || 0);
+  if (contentLength > 20 * 1024 * 1024) {
+    return Response.json({ detail: "Payload exceeds maximum allowed size (20 MB)." }, { status: 413 });
+  }
+
   const backend = process.env.BACKEND_URL || process.env.NEXT_PUBLIC_BACKEND_URL || "http://localhost:8000";
   const { path } = await context.params;
   const upstreamUrl = `${backend.replace(/\/$/, "")}/${path.map(encodeURIComponent).join("/")}${new URL(request.url).search}`;
@@ -20,7 +25,13 @@ async function forward(request: NextRequest, context: RouteContext) {
   headers.delete("content-length");
   headers.set("authorization", `Bearer ${token}`);
   const method = request.method;
-  const body = method === "GET" || method === "HEAD" ? undefined : await request.arrayBuffer();
+  let body: ArrayBuffer | undefined = undefined;
+  if (method !== "GET" && method !== "HEAD") {
+    body = await request.arrayBuffer();
+    if (body.byteLength > 20 * 1024 * 1024) {
+      return Response.json({ detail: "Payload exceeds maximum allowed size (20 MB)." }, { status: 413 });
+    }
+  }
   let upstream: Response;
   try {
     upstream = await fetch(upstreamUrl, { method, headers, body, cache: "no-store", redirect: "manual" });

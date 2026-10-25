@@ -72,8 +72,8 @@ The backend applies the base schema and the versioned SQL migration at startup. 
 | `ENVIRONMENT` | Set to `production` to require HTTPS for outbound actions |
 | `LEGACY_WORKSPACE_ID` | Optional Google `sub` to assign unowned legacy documents, workflows and cache rows during migration |
 | `WEBHOOK_RATE_LIMIT_PER_MINUTE` | Optional per-workflow inbound event limit (default `300`) |
-| `EMBEDDING_MODEL` | Optional embedding model override |
-| `LLM_MODEL` | Optional generation model override |
+| `EMBEDDING_MODEL` | Optional embedding model override (default `text-embedding-004`) |
+| `LLM_MODEL` | Optional generation model override (default `gemini-1.5-flash`) |
 
 ### Next.js (`frontend/.env.local`)
 
@@ -82,6 +82,14 @@ The backend applies the base schema and the versioned SQL migration at startup. 
 | `BACKEND_URL` | Private URL of the FastAPI service |
 | `NEXT_PUBLIC_AUTH_GOOGLE_ID` | Same Google web client ID as the API |
 | `AUTH_SECRET` | Same random session signing secret as the API |
+
+## Client & payload limits
+
+- **File ingestion**: 15 MB maximum upload size per file, enforced on client and API (`/ingest/file`).
+- **Next.js API proxy**: 20 MB maximum request body on backend proxy routes.
+- **Ask prompt**: 1,000 character maximum question length on client and API (`/ask`).
+- **Workflow creation**: Name (2–100 chars), description (max 255 chars), instructions prompt (max 10,000 chars).
+- **Inbound webhooks**: Requires non-empty valid JSON payload (`{}` or empty collections rejected with 422).
 
 ## Existing database migration
 
@@ -92,7 +100,7 @@ For a single-account legacy install, identify the intended Google account's `goo
 ## Deployment checklist
 
 1. Provision managed PostgreSQL with pgvector and managed Redis; take a database backup before the first migration.
-2. Deploy the API container from `api/DockerFile`. Set the API environment variables above. Set `ENVIRONMENT=production`, use HTTPS, configure `CORS_ORIGINS`, and expose `/health` and `/ready` as liveness/readiness probes.
+2. Deploy the API container from `api/Dockerfile`. Set the API environment variables above. Set `ENVIRONMENT=production`, use HTTPS, configure `CORS_ORIGINS`, and expose `/health` and `/ready` as liveness/readiness probes.
 3. Deploy `frontend/` to Vercel or a Node host. Set `BACKEND_URL`, `NEXT_PUBLIC_AUTH_GOOGLE_ID`, and `AUTH_SECRET` in that environment. Keep `BACKEND_URL` private where the host supports private service networking.
 4. Add the production frontend origin to Google OAuth authorized JavaScript origins. Use the same OAuth client ID and exact same session secret across frontend and API.
 5. Send a test login, document upload, grounded Ask query, manual workflow event, approval, automatic workflow event, and action failure through staging before directing customer traffic.
@@ -108,7 +116,7 @@ All routes except `/health`, `/ready`, Google verification, framework docs, and 
 | `POST` | `/ingest/file` | Upload and index a supported knowledge file (15 MB maximum) |
 | `GET` | `/documents` | List files in the current account workspace |
 | `DELETE` | `/documents/{id}` | Remove an uploaded file and its indexed chunks |
-| `POST` | `/ask` | Retrieve grounded support knowledge and answer a question |
+| `POST` | `/ask` | Retrieve grounded support knowledge and answer a question (1,000 char max) |
 | `POST` / `GET` | `/workflows` | Create/list workflows in the current account workspace |
 | `PATCH` | `/workflows/{id}/execution-mode` | Change a workflow-wide `manual` or `automatic` mode |
 | `POST` | `/api/webhooks/{token}` | Accept a customer event, evaluate the workflow and record the run |
@@ -126,7 +134,7 @@ Outbound actions require a public destination. Local/private IPs and local hostn
 api/
   main.py
   migrations/001_customer_workspace.sql
-  DockerFile
+  Dockerfile
 frontend/
   app/                 # Next.js App Router pages and API routes
   lib/auth.ts          # Signed session verification for Next.js

@@ -6,6 +6,7 @@ from fastapi.responses import JSONResponse
 # pyrefly: ignore [missing-import]
 from fastapi.middleware.cors import CORSMiddleware
 import os
+import re
 import json
 import asyncio
 import secrets
@@ -44,7 +45,7 @@ REDIS_URL = os.getenv("REDIS_URL")
 AUTH_SECRET = os.getenv("AUTH_SECRET", "")
 GOOGLE_CLIENT_ID = os.getenv("AUTH_GOOGLE_ID")
 CORS_ORIGINS = [origin.strip() for origin in os.getenv("CORS_ORIGINS", "http://localhost:3000").split(",") if origin.strip()]
-EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "gemini-embedding-001")
+EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "text-embedding-004")
 LLM_MODEL = os.getenv("LLM_MODEL", "gemini-2.5-flash")
 
 @asynccontextmanager
@@ -208,7 +209,7 @@ app = FastAPI(
 @app.middleware("http")
 async def require_signed_session(request: Request, call_next):
     if (
-        request.url.path in {"/health", "/ready", "/auth/google/verify", "/docs", "/openapi.json"}
+        request.url.path in {"/health", "/ready", "/auth/google/verify", "/docs", "/redoc", "/openapi.json"}
         or request.url.path.startswith("/api/webhooks/")
         or request.method == "OPTIONS"
     ):
@@ -362,8 +363,8 @@ class GoogleTokenRequest(BaseModel):
 class WorkflowDecision(BaseModel):
     decision: Literal["APPROVE", "REJECT", "ESCALATE", "REPLY"]
     confidence: float = Field(..., ge=0, le=1)
-    reasoning: str = Field(..., min_length=1, max_length=4_000)
-    action_payload: Dict[str, Optional[str]] = Field(default_factory=dict)
+    reasoning: str = Field(..., min_length=1)
+    action_payload: Dict[str, Any] = Field(default_factory=dict)
 
 class WorkflowModeUpdate(BaseModel):
     execution_mode: Literal["automatic", "manual"]
@@ -528,6 +529,7 @@ async def readiness_check():
 
 @app.post("/ingest/file")
 async def ingest_file(request: Request, file: UploadFile = File(...)):
+    active_workspace = workspace_id(request)
     filename = (file.filename or "uploaded_file").replace("\\", "/").split("/")[-1].strip()
     extension = Path(filename).suffix.lower()
     if extension not in {".pdf", ".txt", ".md", ".csv", ".json"}:
@@ -562,18 +564,22 @@ async def ingest_file(request: Request, file: UploadFile = File(...)):
         raise HTTPException(status_code=400, detail="No text chunks could be extracted from the file.")
 
     try:
-        responses = await asyncio.to_thread(
-            client.models.embed_content,
-            model=EMBEDDING_MODEL,
-            contents=chunks,
-            config={"output_dimensionality": 768}
-        )
+        batch_size = 100
+        all_embeddings = []
+        for i in range(0, len(chunks), batch_size):
+            chunk_batch = chunks[i : i + batch_size]
+            responses = await asyncio.to_thread(
+                client.models.embed_content,
+                model=EMBEDDING_MODEL,
+                contents=chunk_batch,
+                config={"output_dimensionality": 768}
+            )
+            all_embeddings.extend(responses.embeddings)
 
         records = [
             (chunk, "[" + ",".join(map(str, embedding.values)) + "]")
-            for chunk, embedding in zip(chunks, responses.embeddings)
+            for chunk, embedding in zip(chunks, all_embeddings)
         ]
-        active_workspace = workspace_id(request)
         file_id = uuid.uuid4().hex
         async with app.state.pool.acquire() as conn:
             async with conn.transaction():
@@ -594,6 +600,8 @@ async def ingest_file(request: Request, file: UploadFile = File(...)):
             "message": f"Successfully ingested {len(chunks)} chunks from {filename}.",
             "chunks_count": len(chunks),
         }
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Ingestion failed: {str(e)}")
 
@@ -901,8 +909,35 @@ async def toggle_webhook_status(request: Request, workflow_id: int):
 
 
 async def _evaluate_and_execute_workflow(conn, wf: dict, event_text: str, metadata: dict, source: str = "inbound_webhook", idempotency_key: Optional[str] = None):
+    wf = dict(wf)
     workflow_id = wf["id"]
     active_workspace = str(wf["workspace_id"])
+    mode = wf.get("execution_mode") or ("manual" if wf.get("require_approval") else "automatic")
+    needs_review = mode == "manual"
+
+    # Fast-path idempotency check before running vector search or LLM generation
+    if idempotency_key:
+        existing = await conn.fetchrow("""
+            SELECT id, status, executed_at, decision_output FROM workflow_executions
+            WHERE workflow_id = $1 AND idempotency_key = $2
+        """, workflow_id, idempotency_key)
+        if existing:
+            dec_out = json.loads(existing["decision_output"]) if isinstance(existing["decision_output"], str) else existing["decision_output"]
+            return {
+                "ok": True,
+                "status": existing["status"],
+                "execution_id": existing["id"],
+                "workflow_id": workflow_id,
+                "workflow_name": wf["name"],
+                "source": source,
+                "decision": dec_out,
+                "referenced_docs_count": 0,
+                "sources": dec_out.get("sources", []) if isinstance(dec_out, dict) else [],
+                "execution_mode": mode,
+                "requires_human_approval": needs_review,
+                "duplicate": True,
+            }
+
     # 1. Retrieve relevant internal docs using hybrid search
     retrieval = await _hybrid_search(event_text, top_k=3, workspace=active_workspace)
     matched_chunks = [item["content"] for item in retrieval.get("results", [])]
@@ -910,7 +945,7 @@ async def _evaluate_and_execute_workflow(conn, wf: dict, event_text: str, metada
         f"[Source: {item['filename']} | section {item['id']}]\n{item['content']}" for item in retrieval.get("results", [])
     ) if matched_chunks else "No trusted policy or product knowledge was found. Do not invent company policy. Recommend human review when useful."
 
-    # 2. Instruct Gemini 2.5 Flash to return a STRICT JSON decision
+    # 2. Instruct Gemini to return a STRICT JSON decision
     prompt = f"""
     You are Loopdesk, a customer-support copilot executing workflow: "{wf['name']}".
     
@@ -944,16 +979,12 @@ async def _evaluate_and_execute_workflow(conn, wf: dict, event_text: str, metada
             config={"response_mime_type": "application/json"}
         )
         raw_text = (response.text or "").strip()
-        if raw_text.startswith("```"):
-            raw_text = raw_text.split("\n", 1)[1]
-            if raw_text.endswith("```"):
-                raw_text = raw_text.rsplit("```", 1)[0]
+        raw_text = re.sub(r"^```(?:json)?\s*", "", raw_text, flags=re.IGNORECASE)
+        raw_text = re.sub(r"\s*```$", "", raw_text)
         decision = WorkflowDecision.model_validate(json.loads(raw_text.strip())).model_dump()
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"AI evaluation failed: {str(e)}")
 
-    mode = wf.get("execution_mode") or ("manual" if wf.get("require_approval") else "automatic")
-    needs_review = mode == "manual"
     decision["sources"] = [{"filename": item["filename"], "chunk_id": item["id"]} for item in retrieval.get("results", [])]
     initial_status = "pending_review" if needs_review else "dispatching"
     trigger_payload = {"event_text": event_text, "metadata": metadata}
@@ -965,15 +996,22 @@ async def _evaluate_and_execute_workflow(conn, wf: dict, event_text: str, metada
         ON CONFLICT (workflow_id, idempotency_key) WHERE idempotency_key IS NOT NULL DO NOTHING
         RETURNING id, executed_at;
     """, workflow_id, json.dumps(trigger_payload), json.dumps(decision), initial_status, source, idempotency_key)
-    if not row and idempotency_key:
-        existing = await conn.fetchrow("""
-            SELECT id, status, executed_at, decision_output FROM workflow_executions
-            WHERE workflow_id = $1 AND idempotency_key = $2
-        """, workflow_id, idempotency_key)
-        if existing:
-            return {"ok": True, "status": existing["status"], "execution_id": existing["id"], "workflow_id": workflow_id,
-                    "workflow_name": wf["name"], "source": source, "decision": json.loads(existing["decision_output"]) if isinstance(existing["decision_output"], str) else existing["decision_output"],
-                    "referenced_docs_count": len(matched_chunks), "requires_human_approval": needs_review, "duplicate": True}
+    if not row:
+        if idempotency_key:
+            existing = await conn.fetchrow("""
+                SELECT id, status, executed_at, decision_output FROM workflow_executions
+                WHERE workflow_id = $1 AND idempotency_key = $2
+            """, workflow_id, idempotency_key)
+            if existing:
+                dec_out = json.loads(existing["decision_output"]) if isinstance(existing["decision_output"], str) else existing["decision_output"]
+                return {
+                    "ok": True, "status": existing["status"], "execution_id": existing["id"], "workflow_id": workflow_id,
+                    "workflow_name": wf["name"], "source": source, "decision": dec_out,
+                    "referenced_docs_count": len(matched_chunks),
+                    "sources": [{"filename": item["filename"], "chunk_id": item["id"]} for item in retrieval.get("results", [])],
+                    "execution_mode": mode, "requires_human_approval": needs_review, "duplicate": True
+                }
+        raise HTTPException(status_code=409, detail="A duplicate execution for this event is already being processed.")
     execution_id = row["id"]
     action_status = initial_status
     if not needs_review:
@@ -1010,7 +1048,7 @@ async def trigger_workflow(request: Request, workflow_id: int, event: TriggerEve
         wf = await conn.fetchrow("SELECT * FROM workflows WHERE id = $1 AND workspace_id = $2", workflow_id, active_workspace)
         if not wf:
             raise HTTPException(status_code=404, detail="Workflow not found")
-        return await _evaluate_and_execute_workflow(conn, wf, event.event_text, event.metadata or {}, source="manual_trigger", idempotency_key=event.event_id)
+        return await _evaluate_and_execute_workflow(conn, dict(wf), event.event_text, event.metadata or {}, source="manual_trigger", idempotency_key=event.event_id)
 
 
 @app.post("/workflows/{workflow_id}/webhook/test")
@@ -1027,7 +1065,7 @@ async def test_workflow_webhook(workflow_id: int, request: Request):
         event_text = body.get("event_text") if isinstance(body, dict) else None
         if not event_text:
             event_text = f"Sample webhook event for {wf['name']} - customer request inquiry."
-        return await _evaluate_and_execute_workflow(conn, wf, event_text, body if isinstance(body, dict) else {}, source="workflow_test")
+        return await _evaluate_and_execute_workflow(conn, dict(wf), event_text, body if isinstance(body, dict) else {}, source="workflow_test")
 
 
 # ── Public Inbound Webhook Endpoint ───────────────────────────────────────
@@ -1035,9 +1073,10 @@ async def test_workflow_webhook(workflow_id: int, request: Request):
 @app.post("/api/webhooks/{webhook_token}")
 async def handle_inbound_webhook(webhook_token: str, request: Request):
     async with app.state.pool.acquire() as conn:
-        wf = await conn.fetchrow("SELECT * FROM workflows WHERE webhook_token = $1", webhook_token)
-        if not wf:
+        wf_record = await conn.fetchrow("SELECT * FROM workflows WHERE webhook_token = $1", webhook_token)
+        if not wf_record:
             raise HTTPException(status_code=404, detail="Inbound webhook endpoint not found or inactive")
+        wf = dict(wf_record)
         if not wf.get("webhook_enabled", True):
             raise HTTPException(status_code=403, detail="Inbound webhook is disabled for this workflow")
 
@@ -1141,7 +1180,7 @@ async def handle_inbound_webhook(webhook_token: str, request: Request):
             normalized_metadata = {"channel": "webhook", "payload": {"raw": payload}}
             idempotency_key = request.headers.get("idempotency-key") or request.headers.get("x-webhook-event-id")
         event_text = str(event_text).strip()
-        if not event_text:
+        if not event_text or event_text in {"{}", "null", "[]"}:
             raise HTTPException(status_code=422, detail="Webhook payload must include a customer message or event description.")
         if len(event_text) > 10_000:
             raise HTTPException(status_code=413, detail="Customer event text must be 10,000 characters or fewer.")
@@ -1228,16 +1267,21 @@ async def approve_execution(execution_id: int, request: Request):
             decision = json.loads(ex["decision_output"]) if isinstance(ex["decision_output"], str) else ex["decision_output"]
             trigger_payload = json.loads(ex["trigger_payload"]) if isinstance(ex["trigger_payload"], str) else ex["trigger_payload"]
             await conn.execute("UPDATE workflow_executions SET status = 'dispatching' WHERE id = $1", execution_id)
-            dispatch_status = "approved"
-            if ex["action_url"]:
-                try:
-                    await _dispatch_action(ex["action_url"], ex["workflow_id"], ex["workflow_name"], decision, trigger_payload, execution_id)
-                except Exception as error:
-                    print(f"[APPROVAL DISPATCH ERROR] execution={execution_id}: {error}")
-                    dispatch_status = "approved_dispatch_failed"
-            await conn.execute("""
-                UPDATE workflow_executions SET status = $1, reviewed_at = NOW(), reviewed_by = $2 WHERE id = $3
-            """, dispatch_status, reviewer, execution_id)
+            action_url = ex["action_url"]
+            workflow_id_val = ex["workflow_id"]
+            workflow_name_val = ex["workflow_name"]
+
+        dispatch_status = "approved"
+        if action_url:
+            try:
+                await _dispatch_action(action_url, workflow_id_val, workflow_name_val, decision, trigger_payload, execution_id)
+            except Exception as error:
+                print(f"[APPROVAL DISPATCH ERROR] execution={execution_id}: {error}")
+                dispatch_status = "approved_dispatch_failed"
+
+        await conn.execute("""
+            UPDATE workflow_executions SET status = $1, reviewed_at = NOW(), reviewed_by = $2 WHERE id = $3
+        """, dispatch_status, reviewer, execution_id)
         return {"status": dispatch_status, "execution_id": execution_id}
 
 

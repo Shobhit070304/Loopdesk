@@ -1,10 +1,19 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Nav } from "../components";
 
 type UploadResult = { filename: string; message: string; chunks_count: number };
 type KnowledgeDocument = { id: string; filename: string; content_type: string; size_bytes: number | null; chunk_count: number; created_at: string | null };
+
+function formatDetail(detail: unknown, fallback: string): string {
+  if (typeof detail === "string") return detail;
+  if (Array.isArray(detail)) {
+    return detail.map((err) => (typeof err === "object" && err && "msg" in err ? String(err.msg) : JSON.stringify(err))).join("; ");
+  }
+  if (detail && typeof detail === "object") return JSON.stringify(detail);
+  return fallback;
+}
 
 export default function DocumentsPage() {
   const [file, setFile] = useState<File | null>(null);
@@ -14,13 +23,14 @@ export default function DocumentsPage() {
   const [documents, setDocuments] = useState<KnowledgeDocument[]>([]);
   const [loadingDocuments, setLoadingDocuments] = useState(true);
   const [removingId, setRemovingId] = useState<string | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const loadDocuments = useCallback(async () => {
     setLoadingDocuments(true);
     try {
       const response = await fetch("/api/backend/documents?limit=100");
       const data = await response.json();
-      if (!response.ok) throw new Error(data.detail || "Could not load your documents.");
+      if (!response.ok) throw new Error(formatDetail(data.detail, "Could not load your documents."));
       setDocuments(data.documents || []);
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "Could not load your documents.");
@@ -33,6 +43,10 @@ export default function DocumentsPage() {
 
   async function upload() {
     if (!file || busy) return;
+    if (file.size > 15 * 1024 * 1024) {
+      setError("Files must be 15 MB or smaller.");
+      return;
+    }
     setBusy(true);
     setError("");
     setResult(null);
@@ -41,9 +55,10 @@ export default function DocumentsPage() {
     try {
       const response = await fetch("/api/backend/ingest/file", { method: "POST", body });
       const data = await response.json();
-      if (!response.ok) throw new Error(data.detail || "The document could not be uploaded.");
+      if (!response.ok) throw new Error(formatDetail(data.detail, "The document could not be uploaded."));
       setResult(data as UploadResult);
       setFile(null);
+      if (fileInputRef.current) fileInputRef.current.value = "";
       await loadDocuments();
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "The document could not be uploaded.");
@@ -59,7 +74,7 @@ export default function DocumentsPage() {
     try {
       const response = await fetch(`/api/backend/documents/${encodeURIComponent(document.id)}`, { method: "DELETE" });
       const data = await response.json();
-      if (!response.ok) throw new Error(data.detail || "The document could not be removed.");
+      if (!response.ok) throw new Error(formatDetail(data.detail, "The document could not be removed."));
       await loadDocuments();
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "The document could not be removed.");
@@ -72,7 +87,7 @@ export default function DocumentsPage() {
     <div className="page-heading"><p className="eyebrow">YOUR TEAM’S KNOWLEDGE</p><h1>Documents</h1><p>Upload a policy, playbook, or guide to make it available to your AI assistant and workflows.</p></div>
     <section className="card document-upload-card">
       <label className="document-dropzone">
-        <input type="file" accept=".pdf,.txt,.md,.csv,.json" onChange={(event) => { setFile(event.target.files?.[0] || null); setError(""); setResult(null); }} />
+        <input ref={fileInputRef} type="file" accept=".pdf,.txt,.md,.csv,.json" onChange={(event) => { setFile(event.target.files?.[0] || null); setError(""); setResult(null); }} />
         <span className="document-upload-icon" aria-hidden="true">↑</span>
         <strong>{file ? file.name : "Choose a document to upload"}</strong>
         <span>{file ? `${(file.size / 1024).toFixed(1)} KB · Choose another file` : "PDF, TXT, Markdown, CSV, or JSON"}</span>
