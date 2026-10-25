@@ -73,6 +73,24 @@ export default function AskPage() {
     input.current?.focus();
   }
 
+  function deleteConversation(id: string, e: React.MouseEvent) {
+    e.stopPropagation();
+    setConversations((current) => current.filter((c) => c.id !== id));
+    if (activeId === id) {
+      setActiveId(null);
+      setPrompt("");
+      setError("");
+    }
+  }
+
+  function clearAllConversations() {
+    if (!window.confirm("Clear all your saved conversations on this browser?")) return;
+    setConversations([]);
+    setActiveId(null);
+    setPrompt("");
+    setError("");
+  }
+
   async function sendMessage(value = prompt) {
     const query = value.trim();
     if (!query || busy) return;
@@ -81,6 +99,12 @@ export default function AskPage() {
       return;
     }
     const conversationId = activeId || `${Date.now()}`;
+    const priorMessages = activeConversation?.messages || [];
+    const historyPayload = priorMessages.slice(-6).map((m) => ({
+      role: m.role,
+      content: m.content,
+    }));
+
     setActiveId(conversationId);
     setPrompt("");
     setError("");
@@ -96,7 +120,7 @@ export default function AskPage() {
       const response = await fetch("/api/backend/ask", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ query }),
+        body: JSON.stringify({ query, history: historyPayload }),
       });
       const data = await response.json();
       if (!response.ok) {
@@ -125,8 +149,60 @@ export default function AskPage() {
   return <div className="product-shell"><Nav active="ask" /><div className="assistant-layout">
     <aside className="assistant-sidebar" aria-label="Chat history">
       <button className="assistant-new-chat" onClick={startNewChat}><span>＋</span> New chat</button>
-      <p className="assistant-sidebar-label">Recent</p>
-      <div className="assistant-chat-list">{accountConversations.map((conversation) => <button key={conversation.id} className={`assistant-chat-link ${conversation.id === activeId ? "selected" : ""}`} onClick={() => { setActiveId(conversation.id); setPrompt(""); setError(""); }} title={conversation.title}>{conversation.title}</button>)}</div>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "0 6px", marginBottom: "4px" }}>
+        <p className="assistant-sidebar-label" style={{ margin: 0 }}>Recent</p>
+        {accountConversations.length > 0 && (
+          <button
+            type="button"
+            onClick={clearAllConversations}
+            style={{
+              background: "transparent",
+              border: "none",
+              color: "rgba(255, 255, 255, 0.4)",
+              fontSize: "0.72rem",
+              cursor: "pointer",
+            }}
+            title="Clear all chat history"
+          >
+            Clear all
+          </button>
+        )}
+      </div>
+      <div className="assistant-chat-list">
+        {accountConversations.map((conversation) => (
+          <div
+            key={conversation.id}
+            style={{ display: "flex", alignItems: "center", position: "relative" }}
+          >
+            <button
+              className={`assistant-chat-link ${conversation.id === activeId ? "selected" : ""}`}
+              onClick={() => { setActiveId(conversation.id); setPrompt(""); setError(""); }}
+              title={conversation.title}
+              style={{ flex: 1, paddingRight: "26px", textAlign: "left" }}
+            >
+              {conversation.title}
+            </button>
+            <button
+              type="button"
+              onClick={(e) => deleteConversation(conversation.id, e)}
+              style={{
+                position: "absolute",
+                right: "6px",
+                background: "transparent",
+                border: "none",
+                color: "rgba(255, 255, 255, 0.35)",
+                cursor: "pointer",
+                padding: "2px 4px",
+                fontSize: "0.85rem",
+                lineHeight: 1,
+              }}
+              title="Delete conversation"
+            >
+              ×
+            </button>
+          </div>
+        ))}
+      </div>
       <div className="assistant-sidebar-footer"><span className="assistant-sidebar-mark">✳</span><span><b>Loopdesk assistant</b><small>Grounded in your team’s context</small></span></div>
     </aside>
 

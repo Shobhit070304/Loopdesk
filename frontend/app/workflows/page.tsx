@@ -106,6 +106,9 @@ export default function WorkflowsPage() {
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
   const [origin, setOrigin] = useState("");
   const [modeSavingId, setModeSavingId] = useState<number | null>(null);
+  const [testingWorkflowId, setTestingWorkflowId] = useState<number | null>(null);
+  const [testResult, setTestResult] = useState<Record<number, any>>({});
+  const [customTestText, setCustomTestText] = useState<Record<number, string>>({});
 
   useEffect(() => {
     if (typeof window !== "undefined") {
@@ -257,6 +260,29 @@ export default function WorkflowsPage() {
       setMessage(`New webhook credentials generated for ${workflow.name}.`);
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "Could not regenerate credentials.");
+    }
+  }
+
+  async function sendTestEvent(workflow: Workflow) {
+    setTestingWorkflowId(workflow.id);
+    setError("");
+    setMessage("");
+    try {
+      const payloadText = customTestText[workflow.id]?.trim() || `Test inquiry for ${workflow.name}: customer inquired about order status and policy requirements.`;
+      const res = await fetch(`${API}/workflows/${workflow.id}/webhook/test`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ event_text: payloadText }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.detail || "Failed to trigger test event.");
+      setTestResult((prev) => ({ ...prev, [workflow.id]: data }));
+      setMessage(`Test event evaluated for ${workflow.name}! Result: ${data.decision?.decision || "Completed"}.`);
+      await loadWorkflows();
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "Failed to run test event.");
+    } finally {
+      setTestingWorkflowId(null);
     }
   }
 
@@ -540,6 +566,48 @@ export default function WorkflowsPage() {
                               </button>
                             </div>
                           </div>
+                        </div>
+
+                        {/* Test Event Section */}
+                        <div style={{ marginTop: "16px", padding: "16px", borderRadius: "10px", background: "rgba(255, 255, 255, 0.03)", border: "1px solid rgba(255, 255, 255, 0.08)" }}>
+                          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "8px" }}>
+                            <label style={{ fontWeight: 600, fontSize: "0.85rem", color: "inherit" }}>Simulate Inbound Test Event</label>
+                            <button
+                              type="button"
+                              className="button-primary"
+                              style={{ padding: "6px 14px", fontSize: "0.8rem", borderRadius: "6px", cursor: "pointer" }}
+                              disabled={testingWorkflowId === workflow.id}
+                              onClick={() => void sendTestEvent(workflow)}
+                            >
+                              {testingWorkflowId === workflow.id ? "Evaluating…" : "▶ Send Test Event"}
+                            </button>
+                          </div>
+                          <input
+                            type="text"
+                            placeholder={`e.g. Customer message: "Can I get a refund on order #1234?"`}
+                            value={customTestText[workflow.id] || ""}
+                            onChange={(e) => setCustomTestText((prev) => ({ ...prev, [workflow.id]: e.target.value }))}
+                            style={{ width: "100%", padding: "8px 12px", borderRadius: "6px", background: "rgba(0,0,0,0.25)", border: "1px solid rgba(255,255,255,0.12)", color: "inherit", fontSize: "0.85rem" }}
+                          />
+                          {testResult[workflow.id] && (
+                            <div style={{ marginTop: "12px", padding: "12px", borderRadius: "8px", background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.1)", fontSize: "0.82rem" }}>
+                              <div style={{ display: "flex", gap: "8px", alignItems: "center", marginBottom: "6px" }}>
+                                <strong>Decision:</strong>
+                                <span className={`compact-status-badge ${testResult[workflow.id].decision?.decision === "REJECT" ? "rejected" : "approved"}`} style={{ padding: "2px 8px", borderRadius: "4px", fontSize: "0.75rem", fontWeight: 600 }}>
+                                  {testResult[workflow.id].decision?.decision || "COMPLETED"}
+                                </span>
+                                <span style={{ opacity: 0.7 }}>
+                                  ({Math.round((testResult[workflow.id].decision?.confidence || 1) * 100)}% confidence)
+                                </span>
+                              </div>
+                              <p style={{ margin: "4px 0", opacity: 0.85 }}>{testResult[workflow.id].decision?.reasoning}</p>
+                              {testResult[workflow.id].requires_human_approval && (
+                                <p style={{ margin: "6px 0 0", color: "#f59e0b", fontSize: "0.78rem" }}>
+                                  ⓘ Execution paused in Review Queue for human approval.
+                                </p>
+                              )}
+                            </div>
+                          )}
                         </div>
 
                       </div>

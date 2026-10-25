@@ -74,6 +74,8 @@ export default function ApprovalsPage() {
   const [busyAction, setBusyAction] = useState<"approve" | "reject" | null>(null);
   const [filter, setFilter] = useState<RunStatus>("all");
   const [selectedId, setSelectedId] = useState<number | null>(null);
+  const [isEditingDraft, setIsEditingDraft] = useState(false);
+  const [editedDraftText, setEditedDraftText] = useState("");
 
   const refresh = useCallback(async () => {
     setError("");
@@ -101,22 +103,55 @@ export default function ApprovalsPage() {
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, []);
 
-  async function decide(id: number, action: "approve" | "reject") {
+  const selectedItem = useMemo(() => items.find((i) => i.id === selectedId) || null, [items, selectedId]);
+
+  useEffect(() => {
+    setIsEditingDraft(false);
+    if (selectedItem?.decision_output?.action_payload?.message) {
+      setEditedDraftText(selectedItem.decision_output.action_payload.message);
+    } else {
+      setEditedDraftText("");
+    }
+  }, [selectedId, selectedItem]);
+
+  async function decide(id: number, action: "approve" | "reject", editedMessage?: string) {
     setBusyId(id);
     setBusyAction(action);
     setError("");
     try {
-      const response = await fetch(`${API}/workflows/executions/${id}/${action}`, { method: "POST" });
+      const response = await fetch(`${API}/workflows/executions/${id}/${action}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: action === "approve" && editedMessage !== undefined ? JSON.stringify({ edited_message: editedMessage }) : undefined,
+      });
       if (!response.ok) {
         const body = await response.json();
         throw new Error(body.detail || `Could not ${action} this run.`);
       }
+      setIsEditingDraft(false);
       await refresh();
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "Could not update this run.");
     } finally {
       setBusyId(null);
       setBusyAction(null);
+    }
+  }
+
+  async function retryDispatch(id: number) {
+    setBusyId(id);
+    setError("");
+    try {
+      const response = await fetch(`${API}/workflows/executions/${id}/retry`, { method: "POST" });
+      if (!response.ok) {
+        const body = await response.json();
+        throw new Error(body.detail || "Could not retry action dispatch.");
+      }
+      await refresh();
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "Could not retry action dispatch.");
+    } finally {
+      setBusyId(null);
     }
   }
 
@@ -134,7 +169,6 @@ export default function ApprovalsPage() {
   );
 
   const shown = filter === "all" ? items : items.filter((item) => category(item.status, item.decision_output?.decision) === filter);
-  const selectedItem = useMemo(() => items.find((i) => i.id === selectedId) || null, [items, selectedId]);
 
   return (
     <div className="product-shell">
@@ -293,6 +327,19 @@ export default function ApprovalsPage() {
                         </button>
                       </div>
                     )}
+                    {category(item.status) === "failed" && item.has_action && (
+                      <div className="compact-review-actions" onClick={(event) => event.stopPropagation()}>
+                        <button
+                          type="button"
+                          className="compact-review-action approve"
+                          disabled={busyId === item.id}
+                          onClick={() => void retryDispatch(item.id)}
+                          title="Retry outbound action dispatch"
+                        >
+                          {busyId === item.id ? "Retrying…" : "↻ Retry"}
+                        </button>
+                      </div>
+                    )}
                     <span className="compact-arrow">→</span>
                   </div>
                 </div>
@@ -387,14 +434,50 @@ export default function ApprovalsPage() {
                           )}
                         </div>
                       </div>
-                      <div className="ticket-header-meta">
-                        <span className="ticket-draft-badge">Draft for Review</span>
+                      <div className="ticket-header-meta" style={{ display: "flex", gap: "8px", alignItems: "center" }}>
+                        {(selectedItem.status === "pending_review" || selectedItem.status === "pending_approval") && (
+                          <button
+                            type="button"
+                            onClick={() => setIsEditingDraft((prev) => !prev)}
+                            style={{
+                              background: "rgba(255, 255, 255, 0.08)",
+                              border: "1px solid rgba(255, 255, 255, 0.2)",
+                              color: "inherit",
+                              padding: "2px 8px",
+                              borderRadius: "4px",
+                              fontSize: "0.72rem",
+                              cursor: "pointer",
+                            }}
+                          >
+                            {isEditingDraft ? "Done Editing" : "✎ Edit Draft"}
+                          </button>
+                        )}
+                        <span className="ticket-draft-badge">{isEditingDraft ? "Editing Draft" : "Draft for Review"}</span>
                       </div>
                     </div>
                     <div className="ticket-card-body">
-                      <p className="ticket-message-text">
-                        {selectedItem.decision_output.action_payload.message}
-                      </p>
+                      {isEditingDraft ? (
+                        <textarea
+                          rows={4}
+                          value={editedDraftText}
+                          onChange={(e) => setEditedDraftText(e.target.value)}
+                          style={{
+                            width: "100%",
+                            padding: "8px",
+                            borderRadius: "6px",
+                            background: "rgba(0,0,0,0.25)",
+                            border: "1px solid rgba(255,255,255,0.2)",
+                            color: "inherit",
+                            fontSize: "0.88rem",
+                            marginBottom: "8px",
+                            fontFamily: "inherit",
+                          }}
+                        />
+                      ) : (
+                        <p className="ticket-message-text">
+                          {editedDraftText || selectedItem.decision_output.action_payload.message}
+                        </p>
+                      )}
 
                       {/* Integrated Policy Assessment & Reasoning */}
                       {selectedItem.decision_output?.reasoning && (
@@ -490,9 +573,20 @@ export default function ApprovalsPage() {
                   <button
                     className="drawer-btn approve"
                     disabled={busyId === selectedItem.id}
-                    onClick={() => void decide(selectedItem.id, "approve")}
+                    onClick={() => void decide(selectedItem.id, "approve", editedDraftText)}
                   >
                     {busyId === selectedItem.id ? "Processing…" : selectedItem.has_action ? "✓ Approve & Send" : "✓ Approve Decision"}
+                  </button>
+                </div>
+              ) : category(selectedItem.status) === "failed" && selectedItem.has_action ? (
+                <div className="drawer-footer">
+                  <button
+                    className="drawer-btn approve"
+                    style={{ width: "100%" }}
+                    disabled={busyId === selectedItem.id}
+                    onClick={() => void retryDispatch(selectedItem.id)}
+                  >
+                    {busyId === selectedItem.id ? "Retrying…" : "↻ Retry Action Dispatch"}
                   </button>
                 </div>
               ) : (

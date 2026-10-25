@@ -121,8 +121,10 @@ All routes except `/health`, `/ready`, Google verification, framework docs, and 
 | `PATCH` | `/workflows/{id}/execution-mode` | Change a workflow-wide `manual` or `automatic` mode |
 | `POST` | `/api/webhooks/{token}` | Accept a customer event, evaluate the workflow and record the run |
 | `GET` | `/workflow-executions` | List recent workflow activity for the current workspace |
-| `POST` | `/workflows/executions/{id}/approve` | Approve a pending run and dispatch its action |
+| `POST` | `/workflows/executions/{id}/approve` | Approve a pending run, optionally update response text, and dispatch action |
 | `POST` | `/workflows/executions/{id}/reject` | Reject a pending run |
+| `POST` | `/workflows/executions/{id}/retry` | Retry dispatching an action for a failed execution |
+| `POST` | `/workflows/{id}/webhook/test` | Trigger a test event against a workflow |
 
 Inbound events accept common message fields (`event_text`, `text`, `message`, `description`, `customer_message`, `query`) and ticket-like payloads with `ticket.subject` / `ticket.description`. Include a stable `event_id` or `Idempotency-Key` so retries do not dispatch duplicate actions. The high-entropy webhook URL token is a bearer credential; optional HMAC or secret headers provide an additional check.
 

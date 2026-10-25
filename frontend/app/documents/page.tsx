@@ -23,7 +23,12 @@ export default function DocumentsPage() {
   const [documents, setDocuments] = useState<KnowledgeDocument[]>([]);
   const [loadingDocuments, setLoadingDocuments] = useState(true);
   const [removingId, setRemovingId] = useState<string | null>(null);
+  const [searchTerm, setSearchTerm] = useState("");
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const filteredDocuments = documents.filter((doc) =>
+    doc.filename.toLowerCase().includes(searchTerm.toLowerCase().trim())
+  );
 
   const loadDocuments = useCallback(async () => {
     setLoadingDocuments(true);
@@ -97,8 +102,57 @@ export default function DocumentsPage() {
       {result && <p className="upload-success" role="status">✓ {result.message}</p>}
     </section>
     <section className="document-library" aria-labelledby="document-library-heading">
-      <div className="document-library-heading"><div><p className="eyebrow">KNOWLEDGE LIBRARY</p><h2 id="document-library-heading">Uploaded documents</h2><p>Documents are private to this account and used for grounded answers and workflow decisions.</p></div><span>{documents.filter((item) => item.id !== "legacy").length} files</span></div>
-      {loadingDocuments ? <div className="document-library-empty"><span className="spinner" /> Loading your documents…</div> : documents.length === 0 ? <div className="document-library-empty"><span>▤</span><strong>No documents yet</strong><small>Upload your first policy or playbook to give the assistant trusted context.</small></div> : <div className="document-library-list">{documents.map((document) => <article className="document-library-row" key={document.id}><span className="document-library-icon">▤</span><div className="document-library-info"><strong>{document.filename}</strong><small>{document.chunk_count} searchable sections{document.size_bytes ? ` · ${(document.size_bytes / 1024).toFixed(0)} KB` : ""}{document.created_at ? ` · Added ${new Date(document.created_at).toLocaleDateString()}` : ""}</small></div>{document.id !== "legacy" && <button className="document-remove" disabled={removingId === document.id} onClick={() => void removeDocument(document)} aria-label={`Remove ${document.filename}`}>{removingId === document.id ? "Removing…" : "Remove"}</button>}</article>)}</div>}
+      <div className="document-library-heading">
+        <div>
+          <p className="eyebrow">KNOWLEDGE LIBRARY</p>
+          <h2 id="document-library-heading">Uploaded documents</h2>
+          <p>Documents are private to this account and used for grounded answers and workflow decisions.</p>
+        </div>
+        <div style={{ display: "flex", gap: "12px", alignItems: "center" }}>
+          {documents.length > 0 && (
+            <input
+              type="search"
+              placeholder="Filter documents…"
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+              style={{
+                padding: "6px 12px",
+                borderRadius: "6px",
+                background: "rgba(255, 255, 255, 0.05)",
+                border: "1px solid rgba(255, 255, 255, 0.15)",
+                color: "inherit",
+                fontSize: "0.82rem",
+                width: "180px",
+              }}
+            />
+          )}
+          <span>{filteredDocuments.filter((item) => item.id !== "legacy").length} files</span>
+        </div>
+      </div>
+      {loadingDocuments ? (
+        <div className="document-library-empty"><span className="spinner" /> Loading your documents…</div>
+      ) : documents.length === 0 ? (
+        <div className="document-library-empty"><span>▤</span><strong>No documents yet</strong><small>Upload your first policy or playbook to give the assistant trusted context.</small></div>
+      ) : filteredDocuments.length === 0 ? (
+        <div className="document-library-empty"><span>⌕</span><strong>No matching documents</strong><small>No files match “{searchTerm}”. Clear filter to see all files.</small></div>
+      ) : (
+        <div className="document-library-list">
+          {filteredDocuments.map((document) => (
+            <article className="document-library-row" key={document.id}>
+              <span className="document-library-icon">▤</span>
+              <div className="document-library-info">
+                <strong>{document.filename}</strong>
+                <small>{document.chunk_count} searchable sections{document.size_bytes ? ` · ${(document.size_bytes / 1024).toFixed(0)} KB` : ""}{document.created_at ? ` · Added ${new Date(document.created_at).toLocaleDateString()}` : ""}</small>
+              </div>
+              {document.id !== "legacy" && (
+                <button className="document-remove" disabled={removingId === document.id} onClick={() => void removeDocument(document)} aria-label={`Remove ${document.filename}`}>
+                  {removingId === document.id ? "Removing…" : "Remove"}
+                </button>
+              )}
+            </article>
+          ))}
+        </div>
+      )}
     </section>
   </main><footer className="product-footer"><span>Loopdesk · Your team’s knowledge</span></footer></div>;
 }
