@@ -569,13 +569,13 @@ export default function WorkflowsPage() {
                         </div>
 
                         {/* Test Event Section */}
-                        <div style={{ marginTop: "16px", padding: "16px", borderRadius: "10px", background: "rgba(255, 255, 255, 0.03)", border: "1px solid rgba(255, 255, 255, 0.08)" }}>
+                        <div style={{ marginTop: "16px", padding: "16px", borderRadius: "10px", background: "#fbf6ee", border: "1px solid #ebdccb" }}>
                           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "8px" }}>
-                            <label style={{ fontWeight: 600, fontSize: "0.85rem", color: "inherit" }}>Simulate Inbound Test Event</label>
+                            <label style={{ fontWeight: 650, fontSize: "0.82rem", color: "#594939", textTransform: "uppercase", letterSpacing: "0.04em" }}>Simulate Inbound Test Event</label>
                             <button
                               type="button"
                               className="button-primary"
-                              style={{ padding: "6px 14px", fontSize: "0.8rem", borderRadius: "6px", cursor: "pointer" }}
+                              style={{ padding: "6px 14px", fontSize: "0.8rem", borderRadius: "99px", cursor: "pointer" }}
                               disabled={testingWorkflowId === workflow.id}
                               onClick={() => void sendTestEvent(workflow)}
                             >
@@ -587,22 +587,22 @@ export default function WorkflowsPage() {
                             placeholder={`e.g. Customer message: "Can I get a refund on order #1234?"`}
                             value={customTestText[workflow.id] || ""}
                             onChange={(e) => setCustomTestText((prev) => ({ ...prev, [workflow.id]: e.target.value }))}
-                            style={{ width: "100%", padding: "8px 12px", borderRadius: "6px", background: "rgba(0,0,0,0.25)", border: "1px solid rgba(255,255,255,0.12)", color: "inherit", fontSize: "0.85rem" }}
+                            style={{ width: "100%", padding: "9px 12px", borderRadius: "8px", background: "#fffdf9", border: "1px solid #ded3c3", color: "#30291f", fontSize: "0.85rem" }}
                           />
                           {testResult[workflow.id] && (
-                            <div style={{ marginTop: "12px", padding: "12px", borderRadius: "8px", background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.1)", fontSize: "0.82rem" }}>
+                            <div style={{ marginTop: "12px", padding: "12px 14px", borderRadius: "8px", background: "#fff", border: "1px solid #e2d5c3", fontSize: "0.84rem", boxShadow: "0 2px 8px rgba(84,60,30,.04)" }}>
                               <div style={{ display: "flex", gap: "8px", alignItems: "center", marginBottom: "6px" }}>
-                                <strong>Decision:</strong>
+                                <strong style={{ color: "#30291f" }}>Decision:</strong>
                                 <span className={`compact-status-badge ${testResult[workflow.id].decision?.decision === "REJECT" ? "rejected" : "approved"}`} style={{ padding: "2px 8px", borderRadius: "4px", fontSize: "0.75rem", fontWeight: 600 }}>
                                   {testResult[workflow.id].decision?.decision || "COMPLETED"}
                                 </span>
-                                <span style={{ opacity: 0.7 }}>
+                                <span style={{ color: "#746a5c", fontSize: "0.78rem" }}>
                                   ({Math.round((testResult[workflow.id].decision?.confidence || 1) * 100)}% confidence)
                                 </span>
                               </div>
-                              <p style={{ margin: "4px 0", opacity: 0.85 }}>{testResult[workflow.id].decision?.reasoning}</p>
+                              <p style={{ margin: "4px 0", color: "#4c4439", lineHeight: 1.6 }}>{testResult[workflow.id].decision?.reasoning}</p>
                               {testResult[workflow.id].requires_human_approval && (
-                                <p style={{ margin: "6px 0 0", color: "#f59e0b", fontSize: "0.78rem" }}>
+                                <p style={{ margin: "6px 0 0", color: "#b46b24", fontSize: "0.78rem", fontWeight: 500 }}>
                                   ⓘ Execution paused in Review Queue for human approval.
                                 </p>
                               )}

@@ -26,6 +26,9 @@ export default function DocumentsPage() {
   const [searchTerm, setSearchTerm] = useState("");
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  const nonLegacyDocs = documents.filter((item) => item.id !== "legacy");
+  const isLimitReached = nonLegacyDocs.length >= 5;
+
   const filteredDocuments = documents.filter((doc) =>
     doc.filename.toLowerCase().includes(searchTerm.toLowerCase().trim())
   );
@@ -48,6 +51,10 @@ export default function DocumentsPage() {
 
   async function upload() {
     if (!file || busy) return;
+    if (isLimitReached) {
+      setError("Portfolio limit reached: Maximum 5 documents allowed per account. Please delete an existing file first.");
+      return;
+    }
     if (file.size > 15 * 1024 * 1024) {
       setError("Files must be 15 MB or smaller.");
       return;
@@ -91,13 +98,16 @@ export default function DocumentsPage() {
   return <div className="product-shell"><Nav active="documents" /><main className="page-container">
     <div className="page-heading"><p className="eyebrow">YOUR TEAM’S KNOWLEDGE</p><h1>Documents</h1><p>Upload a policy, playbook, or guide to make it available to your AI assistant and workflows.</p></div>
     <section className="card document-upload-card">
-      <label className="document-dropzone">
-        <input ref={fileInputRef} type="file" accept=".pdf,.txt,.md,.csv,.json" onChange={(event) => { setFile(event.target.files?.[0] || null); setError(""); setResult(null); }} />
+      <label className="document-dropzone" style={{ opacity: isLimitReached ? 0.7 : 1 }}>
+        <input ref={fileInputRef} type="file" accept=".pdf,.txt,.md,.csv,.json" disabled={isLimitReached} onChange={(event) => { setFile(event.target.files?.[0] || null); setError(""); setResult(null); }} />
         <span className="document-upload-icon" aria-hidden="true">↑</span>
-        <strong>{file ? file.name : "Choose a document to upload"}</strong>
-        <span>{file ? `${(file.size / 1024).toFixed(1)} KB · Choose another file` : "PDF, TXT, Markdown, CSV, or JSON"}</span>
+        <strong>{isLimitReached ? "Upload limit reached (5 of 5 files indexed)" : file ? file.name : "Choose a document to upload"}</strong>
+        <span>{isLimitReached ? "Remove an existing document below to upload a new one" : file ? `${(file.size / 1024).toFixed(1)} KB · Choose another file` : "PDF, TXT, Markdown, CSV, or JSON (max 15 MB)"}</span>
       </label>
-      <div className="document-upload-actions"><p>Text is extracted securely and indexed for answers and workflow context.</p><button className="button-primary" disabled={!file || busy} onClick={() => void upload()}>{busy ? "Uploading…" : "Upload document"}</button></div>
+      <div className="document-upload-actions">
+        <p>{isLimitReached ? "You have reached the 5-document portfolio demo cap. Delete an unused file to add another." : "Text is extracted securely and indexed for answers and workflow context."}</p>
+        <button className="button-primary" disabled={!file || busy || isLimitReached} onClick={() => void upload()}>{busy ? "Uploading…" : isLimitReached ? "Limit reached (5/5)" : "Upload document"}</button>
+      </div>
       {error && <p className="inline-error" role="alert">{error}</p>}
       {result && <p className="upload-success" role="status">✓ {result.message}</p>}
     </section>
@@ -118,15 +128,17 @@ export default function DocumentsPage() {
               style={{
                 padding: "6px 12px",
                 borderRadius: "6px",
-                background: "rgba(255, 255, 255, 0.05)",
-                border: "1px solid rgba(255, 255, 255, 0.15)",
-                color: "inherit",
+                background: "#fbf6ee",
+                border: "1px solid #ebdccb",
+                color: "#2d2822",
                 fontSize: "0.82rem",
                 width: "180px",
               }}
             />
           )}
-          <span>{filteredDocuments.filter((item) => item.id !== "legacy").length} files</span>
+          <span style={{ fontSize: "0.82rem", color: "#6e6252", fontWeight: 500 }}>
+            {nonLegacyDocs.length} / 5 files {isLimitReached && <span style={{ color: "#b94a48", marginLeft: "4px" }}>(Cap reached)</span>}
+          </span>
         </div>
       </div>
       {loadingDocuments ? (

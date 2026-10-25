@@ -85,11 +85,12 @@ The backend applies the base schema and the versioned SQL migration at startup. 
 
 ## Client & payload limits
 
-- **File ingestion**: 15 MB maximum upload size per file, enforced on client and API (`/ingest/file`).
+- **File ingestion**: 15 MB maximum upload size per file (`/ingest/file`). Maximum **5 documents** per account for all time (portfolio demo tier).
+- **AI Questions**: **50 questions a day** per account (`/ask`), with a 10 requests/minute speed throttle. Maximum 1,000 characters per prompt.
+- **Workflow Events**: **50 customer events a day** combined across all workflows for an account (`/api/webhooks/{token}`, `/workflows/{id}/trigger`, `/workflows/{id}/webhook/test`). Maximum 1 MB payload, 10,000 characters event text.
+- **Workflow creation**: Maximum **10 workflows** per account. Name (2–100 chars), description (max 255 chars), instructions prompt (max 10,000 chars).
 - **Next.js API proxy**: 20 MB maximum request body on backend proxy routes.
-- **Ask prompt**: 1,000 character maximum question length on client and API (`/ask`).
-- **Workflow creation**: Name (2–100 chars), description (max 255 chars), instructions prompt (max 10,000 chars).
-- **Inbound webhooks**: Requires non-empty valid JSON payload (`{}` or empty collections rejected with 422).
+- **Inbound webhooks**: Requires non-empty valid JSON payload (`{}` or empty collections rejected with 422). Optional HMAC signature or secret verification.
 
 ## Existing database migration
 

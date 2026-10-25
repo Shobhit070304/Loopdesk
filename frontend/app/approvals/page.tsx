@@ -440,12 +440,13 @@ export default function ApprovalsPage() {
                             type="button"
                             onClick={() => setIsEditingDraft((prev) => !prev)}
                             style={{
-                              background: "rgba(255, 255, 255, 0.08)",
-                              border: "1px solid rgba(255, 255, 255, 0.2)",
-                              color: "inherit",
+                              background: "#fdf8f0",
+                              border: "1px solid #d9ccbe",
+                              color: "#6e5843",
                               padding: "2px 8px",
                               borderRadius: "4px",
                               fontSize: "0.72rem",
+                              fontWeight: 500,
                               cursor: "pointer",
                             }}
                           >
@@ -463,14 +464,15 @@ export default function ApprovalsPage() {
                           onChange={(e) => setEditedDraftText(e.target.value)}
                           style={{
                             width: "100%",
-                            padding: "8px",
+                            padding: "8px 10px",
                             borderRadius: "6px",
-                            background: "rgba(0,0,0,0.25)",
-                            border: "1px solid rgba(255,255,255,0.2)",
-                            color: "inherit",
+                            background: "#fffdf9",
+                            border: "1px solid #ded3c3",
+                            color: "#28251f",
                             fontSize: "0.88rem",
                             marginBottom: "8px",
                             fontFamily: "inherit",
+                            lineHeight: 1.5,
                           }}
                         />
                       ) : (

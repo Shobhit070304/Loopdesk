@@ -142,7 +142,7 @@ export default function AskPage() {
     return <form className={`chat-composer ${centered ? "centered" : ""}`} onSubmit={(event) => { event.preventDefault(); void sendMessage(); }}>
       <textarea ref={input} rows={1} maxLength={1000} value={prompt} onChange={(event) => setPrompt(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void sendMessage(); } }} placeholder="Message Loopdesk" aria-label="Message Loopdesk" disabled={busy} />
       <button type="submit" aria-label="Send message" disabled={busy || !prompt.trim()}>{busy ? <span className="spinner" /> : "↑"}</button>
-      <small>Loopdesk can make mistakes. Check important information.</small>
+      <small>Loopdesk can make mistakes · Portfolio demo: 50 queries/day</small>
     </form>;
   }
 
@@ -158,9 +158,10 @@ export default function AskPage() {
             style={{
               background: "transparent",
               border: "none",
-              color: "rgba(255, 255, 255, 0.4)",
+              color: "#978a78",
               fontSize: "0.72rem",
               cursor: "pointer",
+              fontWeight: 500,
             }}
             title="Clear all chat history"
           >
@@ -190,11 +191,12 @@ export default function AskPage() {
                 right: "6px",
                 background: "transparent",
                 border: "none",
-                color: "rgba(255, 255, 255, 0.35)",
+                color: "#a49685",
                 cursor: "pointer",
-                padding: "2px 4px",
+                padding: "2px 5px",
                 fontSize: "0.85rem",
                 lineHeight: 1,
+                borderRadius: "4px",
               }}
               title="Delete conversation"
             >
@@ -203,7 +205,7 @@ export default function AskPage() {
           </div>
         ))}
       </div>
-      <div className="assistant-sidebar-footer"><span className="assistant-sidebar-mark">✳</span><span><b>Loopdesk assistant</b><small>Grounded in your team’s context</small></span></div>
+      <div className="assistant-sidebar-footer"><span className="assistant-sidebar-mark">✳</span><span><b>Loopdesk assistant</b><small>Portfolio demo · 50 queries/day</small></span></div>
     </aside>
 
     <main className={`assistant-main ${messages.length === 0 ? "is-empty" : "has-messages"}`}>

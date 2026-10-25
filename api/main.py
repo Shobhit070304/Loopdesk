@@ -1,5 +1,4 @@
 # pyrefly: ignore [missing-import]
-from ast import List
 from pydantic import Field, BaseModel
 # pyrefly: ignore [missing-import]
 from fastapi import FastAPI, HTTPException, Request
@@ -11,7 +10,7 @@ import re
 import json
 import asyncio
 import secrets
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Literal, Optional
 import httpx
 # pyrefly: ignore [missing-import]
 import asyncpg
@@ -19,11 +18,11 @@ import hashlib
 import base64
 import hmac
 import time
+from datetime import datetime, timezone
 import ipaddress
 import socket
 from urllib.parse import urlsplit
 from pathlib import Path
-from typing import Literal
 import uuid
 # pyrefly: ignore [missing-import]
 from dotenv import load_dotenv
@@ -539,6 +538,19 @@ async def readiness_check():
 @app.post("/ingest/file")
 async def ingest_file(request: Request, file: UploadFile = File(...)):
     active_workspace = workspace_id(request)
+
+    # Portfolio limit: Maximum 5 documents for one account for all time
+    async with app.state.pool.acquire() as conn:
+        doc_count = await conn.fetchval(
+            "SELECT COUNT(*) FROM knowledge_documents WHERE workspace_id = $1",
+            active_workspace
+        )
+        if (doc_count or 0) >= 5:
+            raise HTTPException(
+                status_code=400,
+                detail="Portfolio limit reached: Maximum 5 documents allowed per account. Please delete an existing file to upload a new one."
+            )
+
     filename = (file.filename or "uploaded_file").replace("\\", "/").split("/")[-1].strip()
     extension = Path(filename).suffix.lower()
     if extension not in {".pdf", ".txt", ".md", ".csv", ".json"}:
@@ -700,6 +712,30 @@ async def _hybrid_search(query: str, top_k: int, workspace: str, raw_embedding: 
 @app.post("/ask")
 async def ask_rag(request: Request, body: AskRequest):
     active_workspace = workspace_id(request)
+
+    # Portfolio limits: 10 queries/minute speed throttle, 50 queries/day per account
+    minute_str = datetime.now(timezone.utc).strftime("%Y-%m-%d-%H-%M")
+    minute_ask_key = f"limit:ask:min:{active_workspace}:{minute_str}"
+    current_min_count = await app.state.redis.incr(minute_ask_key)
+    if current_min_count == 1:
+        await app.state.redis.expire(minute_ask_key, 120)
+    if current_min_count > 10:
+        raise HTTPException(
+            status_code=429,
+            detail="Rate limit exceeded: Maximum 10 questions per minute. Please slow down."
+        )
+
+    today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    daily_ask_key = f"limit:ask:daily:{active_workspace}:{today_str}"
+    current_ask_count = await app.state.redis.incr(daily_ask_key)
+    if current_ask_count == 1:
+        await app.state.redis.expire(daily_ask_key, 86400 * 2)
+    if current_ask_count > 50:
+        raise HTTPException(
+            status_code=429,
+            detail="Daily AI query limit reached (50 questions/day for this portfolio demo). Please try again tomorrow."
+        )
+
     # 1. L1 exact-match cache is scoped to this account.
     query_hash = _cache_key(active_workspace, body.query)
     cached_response = await app.state.redis.get(f"cache:{active_workspace}:{query_hash}")
@@ -886,6 +922,12 @@ async def create_workflow(request: Request, req: WorkflowCreateRequest):
         await _validate_action_url_destination(req.action_url)
     wh_token, wh_secret = _new_webhook_credentials()
     async with app.state.pool.acquire() as conn:
+        wf_count = await conn.fetchval("SELECT COUNT(*) FROM workflows WHERE workspace_id = $1", active_workspace)
+        if (wf_count or 0) >= 10:
+            raise HTTPException(
+                status_code=400,
+                detail="Portfolio limit reached: Maximum 10 workflows allowed per account. Delete an unused workflow to create a new one."
+            )
         row = await conn.fetchrow("""
             INSERT INTO workflows (workspace_id, name, description, system_prompt, action_type, action_url, require_approval, execution_mode, webhook_token, webhook_secret, webhook_enabled)
             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, TRUE)
@@ -995,6 +1037,18 @@ async def _evaluate_and_execute_workflow(conn, wf: dict, event_text: str, metada
                 "requires_human_approval": needs_review,
                 "duplicate": True,
             }
+
+    # Portfolio limit: 50 customer events a day combined across all workflows for this user account
+    today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    events_limit_key = f"limit:events:daily:{active_workspace}:{today_str}"
+    current_events_count = await app.state.redis.incr(events_limit_key)
+    if current_events_count == 1:
+        await app.state.redis.expire(events_limit_key, 86400 * 2)
+    if current_events_count > 50:
+        raise HTTPException(
+            status_code=429,
+            detail="Daily workflow events limit reached (50 customer events/day across all workflows). Please try again tomorrow."
+        )
 
     # 1. Retrieve relevant internal docs using hybrid search
     retrieval = await _hybrid_search(event_text, top_k=3, workspace=active_workspace)
