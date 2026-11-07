@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Nav, useAuth } from "../components";
 
 type SourceRef = { filename: string; chunk_id?: number };
@@ -31,7 +31,7 @@ export default function AskPage() {
   const bottom = useRef<HTMLDivElement>(null);
   const accountConversations = historyFor === user?.sub ? conversations : [];
   const activeConversation = accountConversations.find((conversation) => conversation.id === activeId);
-  const messages = activeConversation?.messages || [];
+  const messages = useMemo(() => activeConversation?.messages || [], [activeConversation]);
 
   useEffect(() => {
     if (!user?.sub) return;
@@ -98,7 +98,8 @@ export default function AskPage() {
       setError("Questions must be 1,000 characters or fewer.");
       return;
     }
-    const conversationId = activeId || `${Date.now()}`;
+    const now = Date.now();
+    const conversationId = activeId || `${now}`;
     const priorMessages = activeConversation?.messages || [];
     const historyPayload = priorMessages.slice(-6).map((m) => ({
       role: m.role,
@@ -110,9 +111,9 @@ export default function AskPage() {
     setError("");
     setConversations((current) => {
       const existing = current.find((conversation) => conversation.id === conversationId);
-      if (!existing) return [{ id: conversationId, title: query.slice(0, 48), messages: [{ role: "user" as const, content: query }], updatedAt: Date.now() }, ...current].slice(0, HISTORY_LIMIT);
+      if (!existing) return [{ id: conversationId, title: query.slice(0, 48), messages: [{ role: "user" as const, content: query }], updatedAt: now }, ...current].slice(0, HISTORY_LIMIT);
       return current.map((conversation) => conversation.id === conversationId
-        ? { ...conversation, updatedAt: Date.now(), messages: [...conversation.messages, { role: "user", content: query }] }
+        ? { ...conversation, updatedAt: now, messages: [...conversation.messages, { role: "user", content: query }] }
         : conversation);
     });
     setBusy(true);
@@ -124,11 +125,11 @@ export default function AskPage() {
       });
       const data = await response.json();
       if (!response.ok) {
-        const errorMsg = typeof data.detail === "string" ? data.detail : Array.isArray(data.detail) ? data.detail.map((d: any) => d.msg || JSON.stringify(d)).join("; ") : "The assistant could not answer right now.";
+        const errorMsg = typeof data.detail === "string" ? data.detail : Array.isArray(data.detail) ? data.detail.map((d: { msg?: string }) => d.msg || JSON.stringify(d)).join("; ") : "The assistant could not answer right now.";
         throw new Error(errorMsg);
       }
       setConversations((current) => current.map((conversation) => conversation.id === conversationId
-        ? { ...conversation, updatedAt: Date.now(), messages: [...conversation.messages, { role: "assistant", content: data.answer, source: data.source, sources: data.sources }] }
+        ? { ...conversation, updatedAt: now, messages: [...conversation.messages, { role: "assistant", content: data.answer, source: data.source, sources: data.sources }] }
         : conversation));
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "The assistant could not answer right now.");

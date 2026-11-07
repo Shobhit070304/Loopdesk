@@ -43,9 +43,11 @@ load_dotenv()
 DB_URL = os.getenv("DB_URL")
 REDIS_URL = os.getenv("REDIS_URL")
 AUTH_SECRET = os.getenv("AUTH_SECRET", "")
+GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
+GROQ_MODEL = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
 GOOGLE_CLIENT_ID = os.getenv("AUTH_GOOGLE_ID")
 CORS_ORIGINS = [origin.strip() for origin in os.getenv("CORS_ORIGINS", "http://localhost:3000").split(",") if origin.strip()]
-EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "text-embedding-004")
+EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "gemini-embedding-2")
 LLM_MODEL = os.getenv("LLM_MODEL", "gemini-2.5-flash")
 
 @asynccontextmanager
@@ -235,8 +237,92 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-client = genai.Client()
+class LazyGenAIClient:
+    """Lazily initializes the Google GenAI client upon first call, preventing crashes on import when API keys are missing."""
+    def __init__(self):
+        self._client = None
+
+    def _get(self):
+        if self._client is None:
+            api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
+            if api_key:
+                self._client = genai.Client(api_key=api_key.strip())
+            else:
+                self._client = genai.Client()
+        return self._client
+
+    @property
+    def models(self):
+        return self._get().models
+
+client = LazyGenAIClient()
 text_splitter = RecursiveCharacterTextSplitter(chunk_size=500, chunk_overlap=50)
+
+async def _generate_workflow_decision(prompt: str) -> dict:
+    """
+    Evaluates workflow decision using Gemini, with an automatic fallback to Groq
+    if Gemini encounters a rate limit, quota, network error, or invalid output.
+    """
+    gemini_error = None
+
+    # 1. Primary: Google Gemini
+    try:
+        response = await asyncio.to_thread(
+            client.models.generate_content,
+            model=LLM_MODEL,
+            contents=[prompt],
+            config={"response_mime_type": "application/json"}
+        )
+        raw_text = (response.text or "").strip()
+        raw_text = re.sub(r"^```(?:json)?\s*", "", raw_text, flags=re.IGNORECASE)
+        raw_text = re.sub(r"\s*```$", "", raw_text)
+        decision = WorkflowDecision.model_validate(json.loads(raw_text.strip())).model_dump()
+        decision["ai_provider"] = "gemini"
+        return decision
+    except Exception as e:
+        gemini_error = str(e)
+        print(f"[AI EVALUATION] Gemini primary failed: {type(e).__name__} - {gemini_error}")
+
+    # 2. Secondary Fallback: Groq (if configured)
+    groq_key = os.getenv("GROQ_API_KEY") or GROQ_API_KEY
+    if groq_key and groq_key.strip():
+        active_groq_model = os.getenv("GROQ_MODEL") or GROQ_MODEL or "llama-3.3-70b-versatile"
+        try:
+            print(f"[AI EVALUATION] Attempting Groq fallback using model {active_groq_model}...")
+            async with httpx.AsyncClient(timeout=15.0) as http_client:
+                groq_resp = await http_client.post(
+                    "https://api.groq.com/openai/v1/chat/completions",
+                    headers={
+                        "Authorization": f"Bearer {groq_key.strip()}",
+                        "Content-Type": "application/json",
+                    },
+                    json={
+                        "model": active_groq_model,
+                        "messages": [
+                            {
+                                "role": "system",
+                                "content": "You are a customer support copilot decision engine. You must output only a valid, strict JSON object following the schema requested by the user."
+                            },
+                            {"role": "user", "content": prompt}
+                        ],
+                        "response_format": {"type": "json_object"},
+                        "temperature": 0.1,
+                    }
+                )
+                groq_resp.raise_for_status()
+                groq_json = groq_resp.json()
+                raw_text = groq_json["choices"][0]["message"]["content"].strip()
+                raw_text = re.sub(r"^```(?:json)?\s*", "", raw_text, flags=re.IGNORECASE)
+                raw_text = re.sub(r"\s*```$", "", raw_text)
+                decision = WorkflowDecision.model_validate(json.loads(raw_text.strip())).model_dump()
+                decision["ai_provider"] = f"groq:{active_groq_model}"
+                print(f"[AI EVALUATION] Groq fallback succeeded with decision: {decision.get('decision')}")
+                return decision
+        except Exception as groq_err:
+            print(f"[AI EVALUATION] Groq fallback failed: {type(groq_err).__name__} - {groq_err}")
+            raise RuntimeError(f"Gemini failed ({gemini_error}); Groq fallback failed ({groq_err})")
+
+    raise RuntimeError(f"Gemini evaluation failed: {gemini_error}")
 
 def reciprocal_rank_fusion(vector_results, keyword_results, k: int = 60):
     rrf_scores = {}
@@ -355,11 +441,6 @@ class WorkflowCreateRequest(BaseModel):
     execution_mode: Optional[Literal["automatic", "manual"]] = Field(None, description="Execution mode is configured for this workflow")
     require_approval: Optional[bool] = Field(None, description="Legacy alias for manual execution mode")
 
-class TriggerEventRequest(BaseModel):
-    event_text: str = Field(..., description="The main text or summary to evaluate (e.g. customer message)")
-    metadata: Optional[Dict[str, Any]] = Field(default_factory=dict)
-    event_id: Optional[str] = Field(None, max_length=255)
-
 class GoogleTokenRequest(BaseModel):
     id_token: str = Field(..., min_length=50, max_length=10_000)
 
@@ -371,6 +452,14 @@ class WorkflowDecision(BaseModel):
 
 class WorkflowModeUpdate(BaseModel):
     execution_mode: Literal["automatic", "manual"]
+
+class WorkflowUpdateRequest(BaseModel):
+    name: Optional[str] = Field(None, min_length=2, max_length=100)
+    description: Optional[str] = Field(None, max_length=255)
+    system_prompt: Optional[str] = Field(None, min_length=1)
+    action_type: Optional[str] = None
+    action_url: Optional[str] = None
+    execution_mode: Optional[Literal["automatic", "manual"]] = None
 
 
 def _execution_mode(req: WorkflowCreateRequest) -> str:
@@ -654,6 +743,8 @@ async def delete_document(request: Request, doc_id: str):
             res = await conn.execute("DELETE FROM knowledge_documents WHERE id = $1 AND workspace_id = $2", doc_id, active_workspace)
             if res == "DELETE 0" and doc_id.isdigit():
                 res = await conn.execute("DELETE FROM documents WHERE id = $1 AND workspace_id = $2 AND file_id IS NULL", int(doc_id), active_workspace)
+            if res == "DELETE 0" and doc_id == "legacy":
+                res = await conn.execute("DELETE FROM documents WHERE workspace_id = $1 AND file_id IS NULL", active_workspace)
             if res == "DELETE 0":
                 raise HTTPException(status_code=404, detail="Document not found")
         await invalidate_workspace_cache(app, active_workspace)
@@ -709,38 +800,50 @@ async def ask_rag(request: Request, body: AskRequest):
     active_workspace = workspace_id(request)
 
     # Portfolio limits: 10 queries/minute speed throttle, 50 queries/day per account
-    minute_str = datetime.now(timezone.utc).strftime("%Y-%m-%d-%H-%M")
-    minute_ask_key = f"limit:ask:min:{active_workspace}:{minute_str}"
-    current_min_count = await app.state.redis.incr(minute_ask_key)
-    if current_min_count == 1:
-        await app.state.redis.expire(minute_ask_key, 120)
-    if current_min_count > 10:
-        raise HTTPException(
-            status_code=429,
-            detail="Rate limit exceeded: Maximum 10 questions per minute. Please slow down."
-        )
+    try:
+        if getattr(app.state, "redis", None):
+            minute_str = datetime.now(timezone.utc).strftime("%Y-%m-%d-%H-%M")
+            minute_ask_key = f"limit:ask:min:{active_workspace}:{minute_str}"
+            current_min_count = await app.state.redis.incr(minute_ask_key)
+            if current_min_count == 1:
+                await app.state.redis.expire(minute_ask_key, 120)
+            if current_min_count > 10:
+                raise HTTPException(
+                    status_code=429,
+                    detail="Rate limit exceeded: Maximum 10 questions per minute. Please slow down."
+                )
 
-    today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    daily_ask_key = f"limit:ask:daily:{active_workspace}:{today_str}"
-    current_ask_count = await app.state.redis.incr(daily_ask_key)
-    if current_ask_count == 1:
-        await app.state.redis.expire(daily_ask_key, 86400 * 2)
-    if current_ask_count > 50:
-        raise HTTPException(
-            status_code=429,
-            detail="Daily AI query limit reached (50 questions/day for this portfolio demo). Please try again tomorrow."
-        )
+            today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+            daily_ask_key = f"limit:ask:daily:{active_workspace}:{today_str}"
+            current_ask_count = await app.state.redis.incr(daily_ask_key)
+            if current_ask_count == 1:
+                await app.state.redis.expire(daily_ask_key, 86400 * 2)
+            if current_ask_count > 50:
+                raise HTTPException(
+                    status_code=429,
+                    detail="Daily AI query limit reached (50 questions/day for this portfolio demo). Please try again tomorrow."
+                )
+    except HTTPException:
+        raise
+    except Exception as redis_limit_err:
+        print(f"[LIMIT WARNING] Redis ask limit check skipped: {redis_limit_err}")
 
-    # 1. L1 exact-match cache is scoped to this account.
-    query_hash = _cache_key(active_workspace, body.query)
-    cached_response = await app.state.redis.get(f"cache:{active_workspace}:{query_hash}")
-    if cached_response:
-        return {
-            "query": body.query,
-            "answer": cached_response,
-            "source": "cache",
-            "similarity": 1.0,
-        }
+    has_history = bool(body.history and len(body.history) > 0)
+
+    # 1. L1 exact-match cache is scoped to this account (bypassed if multi-turn history exists)
+    if not has_history and getattr(app.state, "redis", None):
+        try:
+            query_hash = _cache_key(active_workspace, body.query)
+            cached_response = await app.state.redis.get(f"cache:{active_workspace}:{query_hash}")
+            if cached_response:
+                return {
+                    "query": body.query,
+                    "answer": cached_response,
+                    "source": "cache",
+                    "similarity": 1.0,
+                }
+        except Exception as redis_cache_err:
+            print(f"[CACHE WARNING] Redis L1 cache read skipped: {redis_cache_err}")
 
     # 2. Embed Query for L2 Semantic Cache & Retrieval
     try:
@@ -754,28 +857,32 @@ async def ask_rag(request: Request, body: AskRequest):
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Embedding failed: {str(e)}")
 
-    # 3. L2 Semantic Cache Check (pgvector cosine similarity >= 0.95)
-    cache_result = await check_semantic_cache(app, active_workspace, raw_embedding, threshold=0.95)
-    if cache_result["hit"]:
-        return {
-            "query":body.query,
-            "answer": cache_result["answer"],
-            "source":"cache",
-            "similarity": cache_result["similarity"]
-        }
+    # 3. L2 Semantic Cache Check (pgvector cosine similarity >= 0.95, bypassed if multi-turn history exists)
+    if not has_history:
+        try:
+            cache_result = await check_semantic_cache(app, active_workspace, raw_embedding, threshold=0.95)
+            if cache_result["hit"]:
+                return {
+                    "query": body.query,
+                    "answer": cache_result["answer"],
+                    "source": "cache",
+                    "similarity": cache_result["similarity"]
+                }
+        except Exception as l2_err:
+            print(f"[CACHE WARNING] L2 semantic cache check skipped: {l2_err}")
 
     # 4. Cache Miss - Hybrid Search (reuse precomputed embedding)
     retrieval_result = await _hybrid_search(body.query, top_k=3, workspace=active_workspace, raw_embedding=raw_embedding)
     retrieved_docs = retrieval_result.get("results", [])
 
     if not retrieved_docs:
-        return{
-            "query":body.query,
-            "answer":"No relevant documents found",
-            "source":"empty"
+        return {
+            "query": body.query,
+            "answer": "No relevant documents found",
+            "source": "empty"
         }
 
-    # 5. Construct Prompt and Generate with Gemini (gemini-2.5-flash)
+    # 5. Construct Prompt and Generate with Gemini (with Groq fallback)
     context_blocks = [f"[Source: {item['filename']} | section {item['id']}]\n{item['content']}" for item in retrieved_docs]
     context_text = "\n\n---\n\n".join(context_blocks)
     
@@ -802,13 +909,47 @@ async def ask_rag(request: Request, body: AskRequest):
     {body.query}
     """
 
+    generated_text = ""
     try:
         response = await asyncio.to_thread(client.models.generate_content, model=LLM_MODEL, contents=[system_prompt])
         generated_text = response.text or "I could not produce a grounded answer. Please review the source documents directly."
-    except Exception as e:
-        raise HTTPException(status_code=502, detail=f"LLM generation failed: {str(e)}")
-    # 6. Cache the response (in Postgres and Redis)
-    await save_to_cache(app, active_workspace, body.query, raw_embedding, generated_text)
+    except Exception as gemini_err:
+        print(f"[ASK LLM] Gemini failed: {gemini_err}. Checking Groq fallback...")
+        groq_key = os.getenv("GROQ_API_KEY") or GROQ_API_KEY
+        if groq_key and groq_key.strip():
+            active_groq_model = os.getenv("GROQ_MODEL") or GROQ_MODEL or "llama-3.3-70b-versatile"
+            try:
+                async with httpx.AsyncClient(timeout=15.0) as http_client:
+                    groq_resp = await http_client.post(
+                        "https://api.groq.com/openai/v1/chat/completions",
+                        headers={
+                            "Authorization": f"Bearer {groq_key.strip()}",
+                            "Content-Type": "application/json",
+                        },
+                        json={
+                            "model": active_groq_model,
+                            "messages": [
+                                {"role": "system", "content": "You are Loopdesk, a customer support copilot."},
+                                {"role": "user", "content": system_prompt}
+                            ],
+                            "temperature": 0.2,
+                        }
+                    )
+                    groq_resp.raise_for_status()
+                    groq_json = groq_resp.json()
+                    generated_text = groq_json["choices"][0]["message"]["content"].strip()
+            except Exception as groq_err:
+                raise HTTPException(status_code=502, detail=f"LLM generation failed: {str(gemini_err)} (Groq fallback error: {str(groq_err)})")
+        else:
+            raise HTTPException(status_code=502, detail=f"LLM generation failed: {str(gemini_err)}")
+
+    # 6. Cache the response (only when standalone query without multi-turn history)
+    if not has_history:
+        try:
+            await save_to_cache(app, active_workspace, body.query, raw_embedding, generated_text)
+        except Exception as cache_save_err:
+            print(f"[CACHE WARNING] Save to cache skipped: {cache_save_err}")
+
     return {
         "query": body.query,
         "answer": generated_text,
@@ -895,7 +1036,15 @@ async def _dispatch_action(
     elif act_type == "email":
         payload_data["subject"] = f"[{workflow_name}] Customer Decision: {decision.get('decision', 'NOTICE')}"
         payload_data["body"] = msg_text
-        payload_data["to"] = action_payload.get("recipient") or (original_event.get("customer_email") if isinstance(original_event, dict) else None)
+        meta_dict = original_event.get("metadata", {}) if isinstance(original_event, dict) and isinstance(original_event.get("metadata"), dict) else {}
+        recipient = (
+            action_payload.get("recipient")
+            or meta_dict.get("customer_email")
+            or meta_dict.get("email")
+            or (original_event.get("customer_email") if isinstance(original_event, dict) else None)
+            or (original_event.get("email") if isinstance(original_event, dict) else None)
+        )
+        payload_data["to"] = recipient
 
     async with httpx.AsyncClient(timeout=8.0, follow_redirects=False) as http_client:
         response = await http_client.post(
@@ -946,6 +1095,75 @@ async def list_workflows(request: Request):
             ORDER BY w.id DESC;
         """, active_workspace)
         return [dict(r) for r in rows]
+
+
+@app.get("/workflows/{workflow_id}")
+async def get_workflow(request: Request, workflow_id: int):
+    active_workspace = workspace_id(request)
+    async with app.state.pool.acquire() as conn:
+        row = await conn.fetchrow("""
+            SELECT id, name, description, system_prompt, action_type, action_url, require_approval, execution_mode,
+                   webhook_token, webhook_secret, webhook_enabled, created_at
+            FROM workflows
+            WHERE id = $1 AND workspace_id = $2
+        """, workflow_id, active_workspace)
+        if not row:
+            raise HTTPException(status_code=404, detail="Workflow not found")
+        return dict(row)
+
+
+@app.patch("/workflows/{workflow_id}")
+async def update_workflow(request: Request, workflow_id: int, req: WorkflowUpdateRequest):
+    active_workspace = workspace_id(request)
+    if req.action_url:
+        await _validate_action_url_destination(req.action_url)
+
+    fields = []
+    values = [workflow_id, active_workspace]
+    idx = 3
+
+    if req.name is not None:
+        fields.append(f"name = ${idx}")
+        values.append(req.name.strip())
+        idx += 1
+    if req.description is not None:
+        fields.append(f"description = ${idx}")
+        values.append(req.description.strip())
+        idx += 1
+    if req.system_prompt is not None:
+        fields.append(f"system_prompt = ${idx}")
+        values.append(req.system_prompt.strip())
+        idx += 1
+    if req.action_type is not None:
+        fields.append(f"action_type = ${idx}")
+        values.append(req.action_type.strip())
+        idx += 1
+    if req.action_url is not None:
+        url_val = req.action_url.strip() if req.action_url.strip() else None
+        fields.append(f"action_url = ${idx}")
+        values.append(url_val)
+        idx += 1
+    if req.execution_mode is not None:
+        fields.append(f"execution_mode = ${idx}")
+        values.append(req.execution_mode)
+        fields.append(f"require_approval = (${idx} = 'manual')")
+        idx += 1
+
+    if not fields:
+        raise HTTPException(status_code=400, detail="No fields provided to update.")
+
+    set_clause = ", ".join(fields)
+    query = f"""
+        UPDATE workflows
+        SET {set_clause}
+        WHERE id = $1 AND workspace_id = $2
+        RETURNING id, name, description, system_prompt, action_type, action_url, require_approval, execution_mode, webhook_token, webhook_secret, webhook_enabled, created_at;
+    """
+    async with app.state.pool.acquire() as conn:
+        row = await conn.fetchrow(query, *values)
+        if not row:
+            raise HTTPException(status_code=404, detail="Workflow not found")
+        return dict(row)
 
 
 @app.delete("/workflows/{workflow_id}")
@@ -1034,16 +1252,21 @@ async def _evaluate_and_execute_workflow(conn, wf: dict, event_text: str, metada
             }
 
     # Portfolio limit: 50 customer events a day combined across all workflows for this user account
-    today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    events_limit_key = f"limit:events:daily:{active_workspace}:{today_str}"
-    current_events_count = await app.state.redis.incr(events_limit_key)
-    if current_events_count == 1:
-        await app.state.redis.expire(events_limit_key, 86400 * 2)
-    if current_events_count > 50:
-        raise HTTPException(
-            status_code=429,
-            detail="Daily workflow events limit reached (50 customer events/day across all workflows). Please try again tomorrow."
-        )
+    try:
+        today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        events_limit_key = f"limit:events:daily:{active_workspace}:{today_str}"
+        current_events_count = await app.state.redis.incr(events_limit_key)
+        if current_events_count == 1:
+            await app.state.redis.expire(events_limit_key, 86400 * 2)
+        if current_events_count > 50:
+            raise HTTPException(
+                status_code=429,
+                detail="Daily workflow events limit reached (50 customer events/day across all workflows). Please try again tomorrow."
+            )
+    except HTTPException:
+        raise
+    except Exception as redis_err:
+        print(f"[LIMIT WARNING] Redis daily rate limit check failed: {type(redis_err).__name__}")
 
     # 1. Retrieve relevant internal docs using hybrid search
     retrieval = await _hybrid_search(event_text, top_k=3, workspace=active_workspace)
@@ -1079,18 +1302,32 @@ async def _evaluate_and_execute_workflow(conn, wf: dict, event_text: str, metada
     """
 
     try:
-        response = await asyncio.to_thread(
-            client.models.generate_content,
-            model=LLM_MODEL,
-            contents=[prompt],
-            config={"response_mime_type": "application/json"}
-        )
-        raw_text = (response.text or "").strip()
-        raw_text = re.sub(r"^```(?:json)?\s*", "", raw_text, flags=re.IGNORECASE)
-        raw_text = re.sub(r"\s*```$", "", raw_text)
-        decision = WorkflowDecision.model_validate(json.loads(raw_text.strip())).model_dump()
+        decision = await _generate_workflow_decision(prompt)
     except Exception as e:
-        raise HTTPException(status_code=502, detail=f"AI evaluation failed: {str(e)}")
+        ai_error = str(e)
+        print(f"[AI EVALUATION FAILED] workflow={workflow_id}: {ai_error}")
+        failed_decision = {
+            "decision": "ESCALATE",
+            "confidence": 0.0,
+            "reasoning": f"AI evaluation failed: {ai_error}. Event captured for human review.",
+            "error": ai_error,
+            "action_payload": {
+                "message": "AI evaluation failed. Event captured for human review."
+            },
+            "sources": [{"filename": item["filename"], "chunk_id": item["id"]} for item in retrieval.get("results", [])]
+        }
+        trigger_payload = {"event_text": event_text, "metadata": metadata}
+        try:
+            await conn.fetchrow("""
+                INSERT INTO workflow_executions (workflow_id, trigger_payload, decision_output, status, source, idempotency_key)
+                VALUES ($1, $2::jsonb, $3::jsonb, 'ai_evaluation_failed', $4, $5)
+                ON CONFLICT (workflow_id, idempotency_key) WHERE idempotency_key IS NOT NULL DO NOTHING
+                RETURNING id, executed_at;
+            """, workflow_id, json.dumps(trigger_payload), json.dumps(failed_decision), source, idempotency_key)
+        except Exception as db_err:
+            print(f"[AUDIT LOG DB ERROR] Could not record failed execution: {db_err}")
+
+        raise HTTPException(status_code=502, detail=f"AI evaluation failed: {ai_error}")
 
     decision["sources"] = [{"filename": item["filename"], "chunk_id": item["id"]} for item in retrieval.get("results", [])]
     initial_status = "pending_review" if needs_review else "dispatching"
@@ -1129,6 +1366,8 @@ async def _evaluate_and_execute_workflow(conn, wf: dict, event_text: str, metada
             except Exception as error:
                 print(f"[ACTION DISPATCH ERROR] execution={execution_id}: {error}")
                 action_status = "automatic_dispatch_failed"
+                decision["error"] = str(error)
+                await conn.execute("UPDATE workflow_executions SET decision_output = $1::jsonb WHERE id = $2", json.dumps(decision), execution_id)
         else:
             action_status = "auto_completed"
         await conn.execute("UPDATE workflow_executions SET status = $1 WHERE id = $2", action_status, execution_id)
@@ -1146,16 +1385,6 @@ async def _evaluate_and_execute_workflow(conn, wf: dict, event_text: str, metada
         "execution_mode": mode,
         "requires_human_approval": needs_review
     }
-
-
-@app.post("/workflows/{workflow_id}/trigger")
-async def trigger_workflow(request: Request, workflow_id: int, event: TriggerEventRequest):
-    active_workspace = workspace_id(request)
-    async with app.state.pool.acquire() as conn:
-        wf = await conn.fetchrow("SELECT * FROM workflows WHERE id = $1 AND workspace_id = $2", workflow_id, active_workspace)
-        if not wf:
-            raise HTTPException(status_code=404, detail="Workflow not found")
-        return await _evaluate_and_execute_workflow(conn, dict(wf), event.event_text, event.metadata or {}, source="manual_trigger", idempotency_key=event.event_id)
 
 
 @app.post("/workflows/{workflow_id}/webhook/test")
@@ -1179,6 +1408,15 @@ async def test_workflow_webhook(workflow_id: int, request: Request):
 
 @app.post("/api/webhooks/{webhook_token}")
 async def handle_inbound_webhook(webhook_token: str, request: Request):
+    body_chunks = []
+    body_size = 0
+    async for chunk in request.stream():
+        body_size += len(chunk)
+        if body_size > 1_000_000:
+            raise HTTPException(status_code=413, detail="Webhook payloads must be 1 MB or smaller.")
+        body_chunks.append(chunk)
+    raw_body = b"".join(body_chunks)
+
     async with app.state.pool.acquire() as conn:
         wf_record = await conn.fetchrow("SELECT * FROM workflows WHERE webhook_token = $1", webhook_token)
         if not wf_record:
@@ -1200,20 +1438,15 @@ async def handle_inbound_webhook(webhook_token: str, request: Request):
         except Exception:
             raise HTTPException(status_code=503, detail="Webhook intake is temporarily unavailable.")
 
-        body_chunks = []
-        body_size = 0
-        async for chunk in request.stream():
-            body_size += len(chunk)
-            if body_size > 1_000_000:
-                raise HTTPException(status_code=413, detail="Webhook payloads must be 1 MB or smaller.")
-            body_chunks.append(chunk)
-        raw_body = b"".join(body_chunks)
-
         # Optional Security Verification:
         # 1. Plain secret header (X-Loopdesk-Secret or X-Webhook-Secret)
         supplied_secret = request.headers.get("x-loopdesk-secret") or request.headers.get("x-webhook-secret")
         if supplied_secret and wf.get("webhook_secret"):
             if not hmac.compare_digest(supplied_secret, wf["webhook_secret"]):
+                await conn.execute("""
+                    INSERT INTO workflow_executions (workflow_id, trigger_payload, decision_output, status, source)
+                    VALUES ($1, $2::jsonb, $3::jsonb, 'webhook_signature_failed', 'inbound_webhook')
+                """, wf["id"], json.dumps({"event_text": "Secret header verification failed."}), json.dumps({"error": "Invalid webhook secret provided in header.", "decision": "REJECT", "reasoning": "Plain secret header did not match workflow secret."}))
                 raise HTTPException(status_code=401, detail="Invalid webhook secret")
 
         # 2. Cryptographic HMAC signature header (X-Loopdesk-Signature or X-Hub-Signature-256 or Stripe-Signature)
@@ -1241,12 +1474,20 @@ async def handle_inbound_webhook(webhook_token: str, request: Request):
                 stripe_expected = hmac.new(wf["webhook_secret"].encode(), f"{timestamp}.".encode() + raw_body, hashlib.sha256).hexdigest()
                 valid_sig = timestamp_valid and any(hmac.compare_digest(signature, stripe_expected) for signature in signatures)
             if not valid_sig:
+                await conn.execute("""
+                    INSERT INTO workflow_executions (workflow_id, trigger_payload, decision_output, status, source)
+                    VALUES ($1, $2::jsonb, $3::jsonb, 'webhook_signature_failed', 'inbound_webhook')
+                """, wf["id"], json.dumps({"event_text": "HMAC signature verification failed.", "raw_preview": raw_body[:500].decode("utf-8", errors="replace")}), json.dumps({"error": "Cryptographic signature mismatch. Please check your HMAC signing secret.", "decision": "REJECT", "reasoning": "Signature mismatch."}))
                 raise HTTPException(status_code=401, detail="Invalid webhook signature")
 
         # Parse body
         try:
             payload = json.loads(raw_body.decode("utf-8")) if raw_body else {}
         except Exception:
+            await conn.execute("""
+                INSERT INTO workflow_executions (workflow_id, trigger_payload, decision_output, status, source)
+                VALUES ($1, $2::jsonb, $3::jsonb, 'webhook_payload_invalid', 'inbound_webhook')
+            """, wf["id"], json.dumps({"event_text": "Malformed non-JSON payload received.", "raw_preview": raw_body[:500].decode("utf-8", errors="replace")}), json.dumps({"error": "Payload could not be parsed as valid JSON.", "decision": "REJECT", "reasoning": "Invalid JSON format."}))
             raise HTTPException(status_code=400, detail="Invalid JSON in webhook payload")
 
         # Extract text description
@@ -1288,6 +1529,10 @@ async def handle_inbound_webhook(webhook_token: str, request: Request):
             idempotency_key = request.headers.get("idempotency-key") or request.headers.get("x-webhook-event-id")
         event_text = str(event_text).strip()
         if not event_text or event_text in {"{}", "null", "[]"}:
+            await conn.execute("""
+                INSERT INTO workflow_executions (workflow_id, trigger_payload, decision_output, status, source)
+                VALUES ($1, $2::jsonb, $3::jsonb, 'webhook_payload_invalid', 'inbound_webhook')
+            """, wf["id"], json.dumps({"event_text": "Empty event payload or missing customer inquiry text.", "raw_preview": str(payload)[:500]}), json.dumps({"error": "Webhook payload must include a customer message, ticket, or event description.", "decision": "REJECT", "reasoning": "No event text extracted."}))
             raise HTTPException(status_code=422, detail="Webhook payload must include a customer message or event description.")
         if len(event_text) > 10_000:
             raise HTTPException(status_code=413, detail="Customer event text must be 10,000 characters or fewer.")
@@ -1299,34 +1544,6 @@ async def handle_inbound_webhook(webhook_token: str, request: Request):
         return await _evaluate_and_execute_workflow(
             conn, wf, event_text, normalized_metadata, source="inbound_webhook", idempotency_key=idempotency_key
         )
-
-
-@app.get("/workflows/{workflow_id}/executions")
-async def get_workflow_executions(request: Request, workflow_id: int, limit: int = 50):
-    active_workspace = workspace_id(request)
-    async with app.state.pool.acquire() as conn:
-        rows = await conn.fetch("""
-            SELECT e.id, e.trigger_payload, e.decision_output, e.status, e.source, e.executed_at, e.reviewed_at, e.reviewed_by,
-                   (w.action_url IS NOT NULL) AS has_action
-            FROM workflow_executions e
-            JOIN workflows w ON w.id = e.workflow_id
-            WHERE e.workflow_id = $1 AND w.workspace_id = $2
-            ORDER BY e.id DESC
-            LIMIT $3;
-        """, workflow_id, active_workspace, max(1, min(limit, 200)))
-        return [
-            {
-                "id": r["id"],
-                "trigger_payload": json.loads(r["trigger_payload"]) if isinstance(r["trigger_payload"], str) else r["trigger_payload"],
-                "decision_output": json.loads(r["decision_output"]) if isinstance(r["decision_output"], str) else r["decision_output"],
-                "status": r["status"],
-                "source": r["source"] or "manual",
-                "executed_at": r["executed_at"].isoformat() if r["executed_at"] else None,
-                "reviewed_at": r["reviewed_at"].isoformat() if r["reviewed_at"] else None,
-                "reviewed_by": r["reviewed_by"], "has_action": r["has_action"]
-            }
-            for r in rows
-        ]
 
 
 @app.get("/workflow-executions")
@@ -1355,50 +1572,92 @@ async def list_workflow_executions(request: Request, limit: int = 200, offset: i
 
 
 @app.post("/workflows/executions/{execution_id}/approve")
-async def approve_execution(execution_id: int, request: Request, body: Optional[ExecutionApproveRequest] = None):
+async def approve_execution(execution_id: int, request: Request):
     user_claims = getattr(request.state, "user", None) or {}
     reviewer = user_claims.get("email") or user_claims.get("name") or "Authorized User"
     active_workspace = workspace_id(request)
-    async with app.state.pool.acquire() as conn:
-        async with conn.transaction():
-            ex = await conn.fetchrow("""
-                SELECT e.*, w.action_url, w.action_type, w.name AS workflow_name
-                FROM workflow_executions e JOIN workflows w ON e.workflow_id = w.id
-                WHERE e.id = $1 AND w.workspace_id = $2
-                FOR UPDATE OF e
-            """, execution_id, active_workspace)
-            if not ex:
-                raise HTTPException(status_code=404, detail="Execution not found")
-            if ex["status"] not in {"pending_review", "pending_approval"}:
-                raise HTTPException(status_code=409, detail="This run has already been reviewed or is not waiting for review.")
-            decision = json.loads(ex["decision_output"]) if isinstance(ex["decision_output"], str) else ex["decision_output"]
-            trigger_payload = json.loads(ex["trigger_payload"]) if isinstance(ex["trigger_payload"], str) else ex["trigger_payload"]
 
-            # Apply edited message if provided by reviewer
-            if body and body.edited_message is not None:
-                if not isinstance(decision.get("action_payload"), dict):
-                    decision["action_payload"] = {}
-                decision["action_payload"]["message"] = body.edited_message
-                await conn.execute("UPDATE workflow_executions SET decision_output = $1 WHERE id = $2", json.dumps(decision), execution_id)
+    body = None
+    try:
+        raw_json = await request.json()
+        if isinstance(raw_json, dict) and raw_json:
+            body = ExecutionApproveRequest.model_validate(raw_json)
+    except Exception:
+        pass
 
-            await conn.execute("UPDATE workflow_executions SET status = 'dispatching' WHERE id = $1", execution_id)
-            action_url = ex["action_url"]
-            workflow_id_val = ex["workflow_id"]
-            workflow_name_val = ex["workflow_name"]
-            action_type_val = ex["action_type"] or "webhook"
+    execution_id_val = execution_id
+    try:
+        async with app.state.pool.acquire() as conn:
+            async with conn.transaction():
+                ex = await conn.fetchrow("""
+                    SELECT e.*, w.action_url, w.action_type, w.name AS workflow_name
+                    FROM workflow_executions e JOIN workflows w ON e.workflow_id = w.id
+                    WHERE e.id = $1 AND w.workspace_id = $2
+                    FOR UPDATE OF e
+                """, execution_id_val, active_workspace)
+                if not ex:
+                    raise HTTPException(status_code=404, detail="Execution not found")
+                if ex["status"] not in {"pending_review", "pending_approval", "ai_evaluation_failed"}:
+                    raise HTTPException(status_code=409, detail="This run has already been reviewed or is not waiting for review.")
+                decision = json.loads(ex["decision_output"]) if isinstance(ex["decision_output"], str) else ex["decision_output"]
+                trigger_payload = json.loads(ex["trigger_payload"]) if isinstance(ex["trigger_payload"], str) else ex["trigger_payload"]
+
+                # Apply edited message if provided by reviewer
+                if body and body.edited_message is not None:
+                    if not isinstance(decision.get("action_payload"), dict):
+                        decision["action_payload"] = {}
+                    decision["action_payload"]["message"] = body.edited_message
+                    await conn.execute("UPDATE workflow_executions SET decision_output = $1 WHERE id = $2", json.dumps(decision), execution_id_val)
+
+                await conn.execute("UPDATE workflow_executions SET status = 'dispatching' WHERE id = $1", execution_id_val)
+                action_url = ex["action_url"]
+                workflow_id_val = ex["workflow_id"]
+                workflow_name_val = ex["workflow_name"]
+                action_type_val = ex["action_type"] or "webhook"
 
         dispatch_status = "approved"
+        dispatch_error = None
         if action_url:
             try:
-                await _dispatch_action(action_url, workflow_id_val, workflow_name_val, decision, trigger_payload, execution_id, action_type=action_type_val)
+                await _dispatch_action(action_url, workflow_id_val, workflow_name_val, decision, trigger_payload, execution_id_val, action_type=action_type_val)
             except Exception as error:
-                print(f"[APPROVAL DISPATCH ERROR] execution={execution_id}: {error}")
+                print(f"[APPROVAL DISPATCH ERROR] execution={execution_id_val}: {error}")
                 dispatch_status = "approved_dispatch_failed"
+                dispatch_error = str(error)
 
-        await conn.execute("""
-            UPDATE workflow_executions SET status = $1, reviewed_at = NOW(), reviewed_by = $2 WHERE id = $3
-        """, dispatch_status, reviewer, execution_id)
-        return {"status": dispatch_status, "execution_id": execution_id}
+        async with app.state.pool.acquire() as conn:
+            if dispatch_error:
+                if isinstance(decision, dict):
+                    decision["error"] = dispatch_error
+                await conn.execute("""
+                    UPDATE workflow_executions 
+                    SET status = $1, reviewed_at = NOW(), reviewed_by = $2, decision_output = $3::jsonb 
+                    WHERE id = $4
+                """, dispatch_status, reviewer, json.dumps(decision), execution_id_val)
+            else:
+                if isinstance(decision, dict) and "error" in decision:
+                    decision.pop("error", None)
+                await conn.execute("""
+                    UPDATE workflow_executions 
+                    SET status = $1, reviewed_at = NOW(), reviewed_by = $2, decision_output = $3::jsonb 
+                    WHERE id = $4
+                """, dispatch_status, reviewer, json.dumps(decision), execution_id_val)
+
+        return {"status": dispatch_status, "execution_id": execution_id_val}
+    except HTTPException:
+        raise
+    except Exception as unhandled_err:
+        print(f"[APPROVAL FATAL ERROR] execution={execution_id_val}: {unhandled_err}")
+        try:
+            async with app.state.pool.acquire() as conn:
+                await conn.execute("""
+                    UPDATE workflow_executions 
+                    SET status = 'approved_dispatch_failed', reviewed_at = NOW(), reviewed_by = $1 
+                    WHERE id = $2
+                """, reviewer, execution_id_val)
+        except Exception:
+            pass
+        raise HTTPException(status_code=502, detail=f"Approval action dispatch failed: {str(unhandled_err)}")
 
 
 @app.post("/workflows/executions/{execution_id}/reject")
@@ -1412,7 +1671,7 @@ async def reject_execution(execution_id: int, request: Request):
             SET status = 'rejected', reviewed_at = NOW(), reviewed_by = $1
             FROM workflows w
             WHERE e.workflow_id = w.id AND w.workspace_id = $2 AND e.id = $3
-              AND e.status IN ('pending_review', 'pending_approval')
+              AND e.status IN ('pending_review', 'pending_approval', 'ai_evaluation_failed')
         """, reviewer, active_workspace, execution_id)
         if res == "UPDATE 0":
             exists = await conn.fetchval("""
@@ -1427,7 +1686,6 @@ async def reject_execution(execution_id: int, request: Request):
 
 @app.post("/workflows/executions/{execution_id}/retry")
 async def retry_execution_dispatch(execution_id: int, request: Request):
-    user_claims = getattr(request.state, "user", None) or {}
     active_workspace = workspace_id(request)
     async with app.state.pool.acquire() as conn:
         ex = await conn.fetchrow("""
@@ -1438,8 +1696,8 @@ async def retry_execution_dispatch(execution_id: int, request: Request):
         """, execution_id, active_workspace)
         if not ex:
             raise HTTPException(status_code=404, detail="Execution not found")
-        if "failed" not in ex["status"]:
-            raise HTTPException(status_code=400, detail="Only failed executions can be retried.")
+        if "failed" not in ex["status"] and ex["status"] != "dispatching":
+            raise HTTPException(status_code=400, detail="Only failed or interrupted executions can be retried.")
         if not ex["action_url"]:
             raise HTTPException(status_code=400, detail="Workflow does not have an action URL configured.")
         
@@ -1453,8 +1711,14 @@ async def retry_execution_dispatch(execution_id: int, request: Request):
                 decision, trigger_payload, execution_id, action_type=action_type
             )
             new_status = "approved" if ex["reviewed_at"] else "auto_executed"
-            await conn.execute("UPDATE workflow_executions SET status = $1 WHERE id = $2", new_status, execution_id)
+            if isinstance(decision, dict) and "error" in decision:
+                decision.pop("error", None)
+            await conn.execute("UPDATE workflow_executions SET status = $1, decision_output = $2::jsonb WHERE id = $3", new_status, json.dumps(decision), execution_id)
             return {"status": new_status, "execution_id": execution_id, "message": "Action dispatched successfully."}
         except Exception as error:
             print(f"[RETRY DISPATCH ERROR] execution={execution_id}: {error}")
+            new_status = "approved_dispatch_failed" if ex["reviewed_at"] else "automatic_dispatch_failed"
+            if isinstance(decision, dict):
+                decision["error"] = str(error)
+            await conn.execute("UPDATE workflow_executions SET status = $1, decision_output = $2::jsonb WHERE id = $3", new_status, json.dumps(decision), execution_id)
             raise HTTPException(status_code=502, detail=f"Retry dispatch failed: {str(error)}")

@@ -53,5 +53,4 @@ async function forward(request: NextRequest, context: RouteContext) {
 export const GET = forward;
 export const POST = forward;
 export const DELETE = forward;
-export const PUT = forward;
 export const PATCH = forward;

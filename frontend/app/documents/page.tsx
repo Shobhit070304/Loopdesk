@@ -80,7 +80,7 @@ export default function DocumentsPage() {
   }
 
   async function removeDocument(document: KnowledgeDocument) {
-    if (document.id === "legacy" || !window.confirm(`Remove “${document.filename}” and its indexed content?`)) return;
+    if (!window.confirm(`Remove “${document.filename}” and its indexed content?`)) return;
     setRemovingId(document.id);
     setError("");
     try {
@@ -156,11 +156,9 @@ export default function DocumentsPage() {
                 <strong>{document.filename}</strong>
                 <small>{document.chunk_count} searchable sections{document.size_bytes ? ` · ${(document.size_bytes / 1024).toFixed(0)} KB` : ""}{document.created_at ? ` · Added ${new Date(document.created_at).toLocaleDateString()}` : ""}</small>
               </div>
-              {document.id !== "legacy" && (
-                <button className="document-remove" disabled={removingId === document.id} onClick={() => void removeDocument(document)} aria-label={`Remove ${document.filename}`}>
-                  {removingId === document.id ? "Removing…" : "Remove"}
-                </button>
-              )}
+              <button className="document-remove" disabled={removingId === document.id} onClick={() => void removeDocument(document)} aria-label={`Remove ${document.filename}`}>
+                {removingId === document.id ? "Removing…" : "Remove"}
+              </button>
             </article>
           ))}
         </div>

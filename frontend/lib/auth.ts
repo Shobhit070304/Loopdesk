@@ -28,6 +28,6 @@ export function readSessionToken(value?: string | null): SessionUser | null {
 
 export async function getSession() {
   const cookieStore = await cookies();
-  return readSessionToken(cookieStore.get(SESSION_COOKIE)?.value || cookieStore.get("amberline_session")?.value);
+  return readSessionToken(cookieStore.get(SESSION_COOKIE)?.value);
 }
 

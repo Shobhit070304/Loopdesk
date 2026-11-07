@@ -33,7 +33,7 @@ The backend derives the workspace key from the signed Google subject. Documents,
 
 Requirements: Node.js 20+, Python 3.11+, PostgreSQL with pgvector, Redis, and a Gemini API key.
 
-1. Start PostgreSQL/Redis from `api/docker-compose.yaml`, or use compatible managed services.
+1. Start local PostgreSQL (with pgvector extension) and Redis, or connect to compatible managed cloud services (e.g. Neon, Supabase, Upstash).
 2. Create `api/.env` from `api/.env.example`. Configure `DB_URL`, `REDIS_URL`, `GEMINI_API_KEY`, `AUTH_GOOGLE_ID`, and a random `AUTH_SECRET` of at least 32 characters.
 3. Install and start FastAPI:
 
@@ -94,7 +94,7 @@ The backend applies the base schema and the versioned SQL migration at startup. 
 ## Deployment checklist
 
 1. Provision managed PostgreSQL with pgvector and managed Redis; take a database backup before the first migration.
-2. Deploy the API container from `api/Dockerfile`. Set the API environment variables above. Set `ENVIRONMENT=production`, use HTTPS, configure `CORS_ORIGINS`, and expose `/health` and `/ready` as liveness/readiness probes.
+2. Deploy the FastAPI service using Uvicorn (e.g. on Render, Railway, AWS, or a virtual host). Set the API environment variables above. Set `ENVIRONMENT=production`, use HTTPS, configure `CORS_ORIGINS`, and expose `/health` and `/ready` as liveness/readiness probes.
 3. Deploy `frontend/` to Vercel or a Node host. Set `BACKEND_URL`, `NEXT_PUBLIC_AUTH_GOOGLE_ID`, and `AUTH_SECRET` in that environment. Keep `BACKEND_URL` private where the host supports private service networking.
 4. Add the production frontend origin to Google OAuth authorized JavaScript origins. Use the same OAuth client ID and exact same session secret across frontend and API.
 5. Send a test login, document upload, grounded Ask query, manual workflow event, approval, automatic workflow event, and action failure through staging before directing customer traffic.
@@ -130,7 +130,6 @@ Outbound actions require a public destination. Local/private IPs and local hostn
 api/
   main.py
   migrations/001_customer_workspace.sql
-  Dockerfile
 frontend/
   app/                 # Next.js App Router pages and API routes
   lib/auth.ts          # Signed session verification for Next.js

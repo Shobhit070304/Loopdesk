@@ -512,6 +512,10 @@ code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .
 .workflow-approval-tag, .workflow-action-tag { justify-self: start; padding: 5px 8px; border: 1px solid #e6ded2; border-radius: 99px; color: #776b5d; background: #faf7f1; font-size: 9px; white-space: nowrap; }
 .workflow-approval-tag.required { border-color: #ead2b2; color: #94652f; background: #fbf2e5; }
 .workflow-approval-tag.automatic { border-color: #d5e2d0; color: #5e7658; background: #f0f6ed; }
+.workflow-edit-btn { display: inline-flex; align-items: center; gap: 4px; padding: 4px 9px; border: 1px solid #dfd7cb; border-radius: 7px; color: #695d4e; background: #faf7f1; font-size: 11px; font-weight: 500; cursor: pointer; flex-shrink: 0; transition: all .15s ease; }
+.workflow-edit-btn:hover { background: #f3ece0; color: #3d3429; border-color: #cbbfb0; }
+.workflow-cancel-btn { padding: 9px 15px; border: 1px solid #dcd3c5; border-radius: 8px; color: #6e6252; background: #f9f6f0; font-size: 12px; cursor: pointer; font-weight: 500; transition: all .15s ease; }
+.workflow-cancel-btn:hover { background: #eee7db; color: #43392c; }
 .workflow-delete { display: grid; place-items: center; width: 26px; height: 26px; border: 0; border-radius: 7px; color: #a59a8d; background: transparent; font-size: 18px; cursor: pointer; flex-shrink: 0; }
 .workflow-delete:hover { background: #fbefeb; color: #b54e3c; }
 .approval-stats { grid-template-columns: repeat(7, minmax(0,1fr)); gap: 10px; margin: 24px 0 35px; }
@@ -752,9 +756,44 @@ code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .
   white-space: nowrap;
 }
 .compact-review-actions { display: flex; align-items: center; gap: 6px; flex: 0 0 auto; }
-.compact-review-action { padding: 6px 9px; border: 1px solid #e3d8c9; border-radius: 7px; background: #fffdf9; color: #675744; font-size: 10px; font-weight: 600; cursor: pointer; }
-.compact-review-action.approve { border-color: #c8ddbf; background: #eff6eb; color: #426b3a; }
-.compact-review-action.reject { border-color: #ecd0c6; background: #fbf0eb; color: #9c4938; }
+.compact-review-action {
+  padding: 5px 10px;
+  border: 1px solid #e3d8c9;
+  border-radius: 7px;
+  background: #fffdf9;
+  color: #675744;
+  font-size: 11px;
+  font-weight: 650;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.compact-review-action.approve {
+  border-color: #bcdbb1;
+  background: #edf7e9;
+  color: #336928;
+}
+.compact-review-action.approve:hover:not(:disabled) {
+  border-color: #9ecc8f;
+  background: #ddf1d7;
+  color: #244f1c;
+  transform: translateY(-1px);
+  box-shadow: 0 2px 6px rgba(45, 95, 35, 0.12);
+}
+.compact-review-action.reject {
+  border-color: #eecbc0;
+  background: #fdf1ec;
+  color: #9d3f2c;
+}
+.compact-review-action.reject:hover:not(:disabled) {
+  border-color: #dfaba0;
+  background: #fae4dd;
+  color: #802f1f;
+  transform: translateY(-1px);
+  box-shadow: 0 2px 6px rgba(150, 55, 35, 0.12);
+}
 .compact-review-action:disabled { opacity: .55; cursor: wait; }
 
 .compact-arrow {

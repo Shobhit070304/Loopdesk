@@ -60,6 +60,15 @@ type Template = {
   approval: boolean;
 };
 
+type WorkflowTestResult = {
+  decision?: {
+    decision?: string;
+    confidence?: number;
+    reasoning?: string;
+  };
+  requires_human_approval?: boolean;
+};
+
 const examples: Template[] = [
   {
     icon: "↩",
@@ -97,6 +106,7 @@ export default function WorkflowsPage() {
   const [approval, setApproval] = useState(true);
   const [activeExample, setActiveExample] = useState("");
   const [busy, setBusy] = useState(false);
+  const [editingWorkflowId, setEditingWorkflowId] = useState<number | null>(null);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
 
@@ -107,7 +117,7 @@ export default function WorkflowsPage() {
   const [origin, setOrigin] = useState("");
   const [modeSavingId, setModeSavingId] = useState<number | null>(null);
   const [testingWorkflowId, setTestingWorkflowId] = useState<number | null>(null);
-  const [testResult, setTestResult] = useState<Record<number, any>>({});
+  const [testResult, setTestResult] = useState<Record<number, WorkflowTestResult>>({});
   const [customTestText, setCustomTestText] = useState<Record<number, string>>({});
 
   useEffect(() => {
@@ -131,7 +141,7 @@ export default function WorkflowsPage() {
     void loadWorkflows();
   }, [loadWorkflows]);
 
-  function useExample(example: Template) {
+  function selectExample(example: Template) {
     setActiveExample(example.name);
     setName(example.name);
     setDescription(example.description);
@@ -139,41 +149,91 @@ export default function WorkflowsPage() {
     setAction(example.action);
     setApproval(example.approval);
     setUrl("");
+    setEditingWorkflowId(null);
   }
 
-  async function createWorkflow(event: React.FormEvent) {
+  function startEditingWorkflow(workflow: Workflow) {
+    setEditingWorkflowId(workflow.id);
+    setName(workflow.name);
+    setDescription(workflow.description || "");
+    setPrompt(workflow.system_prompt);
+    setAction((workflow.action_type as "webhook" | "slack" | "email") || "webhook");
+    setUrl(workflow.action_url || "");
+    setApproval((workflow.execution_mode || (workflow.require_approval ? "manual" : "automatic")) === "manual");
+    setActiveExample("");
+    setError("");
+    setMessage(`Editing “${workflow.name}”. Modify instructions or destinations and click “Save changes”.`);
+    const builder = document.getElementById("workflow-builder");
+    if (builder) builder.scrollIntoView({ behavior: "smooth" });
+  }
+
+  function cancelEditing() {
+    setEditingWorkflowId(null);
+    setName("");
+    setDescription("");
+    setPrompt("");
+    setUrl("");
+    setActiveExample("");
+    setMessage("");
+    setError("");
+  }
+
+  async function saveWorkflow(event: React.FormEvent) {
     event.preventDefault();
     if (!name.trim() || !prompt.trim()) return;
     setBusy(true);
     setError("");
     setMessage("");
     try {
-      const response = await fetch(`${API}/workflows`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          name: name.trim(),
-          description: description.trim() || null,
-          system_prompt: prompt.trim(),
-          action_type: action,
-          action_url: url.trim() || null,
-          execution_mode: approval ? "manual" : "automatic",
-          require_approval: approval,
-        }),
-      });
-      const data = await readApiResponse<Workflow>(response, "create this workflow");
-      setName("");
-      setDescription("");
-      setPrompt("");
-      setUrl("");
-      setActiveExample("");
-      setMessage(`${data.name} is ready with an active Inbound Webhook.`);
-      await loadWorkflows();
-      if (data.id) {
-        setExpandedWebhookId(data.id);
+      if (editingWorkflowId) {
+        const response = await fetch(`${API}/workflows/${editingWorkflowId}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            name: name.trim(),
+            description: description.trim() || null,
+            system_prompt: prompt.trim(),
+            action_type: action,
+            action_url: url.trim() || null,
+            execution_mode: approval ? "manual" : "automatic",
+          }),
+        });
+        const data = await readApiResponse<Workflow>(response, "update this workflow");
+        setMessage(`Workflow “${data.name}” updated successfully.`);
+        setEditingWorkflowId(null);
+        setName("");
+        setDescription("");
+        setPrompt("");
+        setUrl("");
+        await loadWorkflows();
+      } else {
+        const response = await fetch(`${API}/workflows`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            name: name.trim(),
+            description: description.trim() || null,
+            system_prompt: prompt.trim(),
+            action_type: action,
+            action_url: url.trim() || null,
+            execution_mode: approval ? "manual" : "automatic",
+            require_approval: approval,
+          }),
+        });
+        const data = await readApiResponse<Workflow>(response, "create this workflow");
+        setName("");
+        setDescription("");
+        setPrompt("");
+        setUrl("");
+        setActiveExample("");
+        setMessage(`${data.name} is ready with an active Inbound Webhook.`);
+        await loadWorkflows();
+        if (data.id) {
+          setExpandedWebhookId(data.id);
+        }
       }
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "Could not create this workflow.");
+      setError(reason instanceof Error ? reason.message : `Could not ${editingWorkflowId ? "update" : "create"} this workflow.`);
     } finally {
       setBusy(false);
     }
@@ -331,7 +391,7 @@ export default function WorkflowsPage() {
                 <button
                   key={example.name}
                   className={`workflow-example ${activeExample === example.name ? "selected" : ""}`}
-                  onClick={() => useExample(example)}
+                  onClick={() => selectExample(example)}
                 >
                   <span className="workflow-example-icon">{example.icon}</span>
                   <span>
@@ -346,11 +406,11 @@ export default function WorkflowsPage() {
 
           <section className="workflow-builder card" id="workflow-builder">
             <div className="workflow-panel-heading">
-              <p className="eyebrow">WORKFLOW CREATOR</p>
-              <h2>Build a workflow</h2>
-              <p>Give it clear instructions and choose what happens after a decision.</p>
+              <p className="eyebrow">{editingWorkflowId ? "EDITING WORKFLOW" : "WORKFLOW CREATOR"}</p>
+              <h2>{editingWorkflowId ? `Edit “${name}”` : "Build a workflow"}</h2>
+              <p>{editingWorkflowId ? "Update instructions, mode, or dispatch destinations without losing execution history." : "Give it clear instructions and choose what happens after a decision."}</p>
             </div>
-            <form className="workflow-form" onSubmit={(event) => void createWorkflow(event)}>
+            <form className="workflow-form" onSubmit={(event) => void saveWorkflow(event)}>
               <label>
                 Workflow name
                 <input
@@ -412,14 +472,25 @@ export default function WorkflowsPage() {
                   </button>
                 </div>
               </fieldset>
-              <button
-                className="button-primary workflow-save"
-                type="submit"
-                disabled={busy || !name.trim() || !prompt.trim()}
-              >
-                {busy ? "Saving…" : "Create workflow"}
-                <span>↗</span>
-              </button>
+              <div style={{ display: "flex", gap: "10px", alignItems: "center" }}>
+                <button
+                  className="button-primary workflow-save"
+                  type="submit"
+                  disabled={busy || !name.trim() || !prompt.trim()}
+                >
+                  {busy ? "Saving…" : editingWorkflowId ? "Save changes" : "Create workflow"}
+                  <span>↗</span>
+                </button>
+                {editingWorkflowId && (
+                  <button
+                    type="button"
+                    className="workflow-cancel-btn"
+                    onClick={cancelEditing}
+                  >
+                    Cancel edit
+                  </button>
+                )}
+              </div>
             </form>
           </section>
         </section>
@@ -476,6 +547,13 @@ export default function WorkflowsPage() {
                           title="View inbound webhook details and signing secret"
                         >
                           <span>⚡</span> {isExpanded ? "Hide Webhook" : "Inbound Webhook"}
+                        </button>
+                        <button
+                          className="workflow-edit-btn"
+                          onClick={() => startEditingWorkflow(workflow)}
+                          title={`Edit ${workflow.name} settings and instructions`}
+                        >
+                          ✎ Edit
                         </button>
                         <button
                           className="workflow-delete"

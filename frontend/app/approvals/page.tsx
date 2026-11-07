@@ -16,6 +16,7 @@ type Execution = {
     decision?: string;
     confidence?: number;
     reasoning?: string;
+    error?: string;
     action_payload?: { message?: string; recipient?: string };
     sources?: { filename: string; chunk_id?: number }[];
   };
@@ -39,7 +40,7 @@ function category(status: string, rawDecision?: string): Exclude<RunStatus, "all
   if (status === "pending_approval" || status === "pending_review") return "pending";
   if (status === "rejected") return "rejected";
   if (status === "approved" || status === "executed") return "approved";
-  if (status.includes("failed")) return "failed";
+  if (status.includes("failed") || status === "dispatching" || status === "ai_evaluation_failed" || status.includes("invalid")) return "failed";
   if (status === "auto_executed" || status === "auto_completed") {
     const decision = (rawDecision || "").toUpperCase();
     if (decision === "REJECT") return "rejected";
@@ -119,10 +120,11 @@ export default function ApprovalsPage() {
     setBusyAction(action);
     setError("");
     try {
+      const hasBody = action === "approve";
       const response = await fetch(`${API}/workflows/executions/${id}/${action}`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: action === "approve" && editedMessage !== undefined ? JSON.stringify({ edited_message: editedMessage }) : undefined,
+        headers: hasBody ? { "Content-Type": "application/json" } : {},
+        body: hasBody ? JSON.stringify({ edited_message: editedMessage ?? null }) : undefined,
       });
       if (!response.ok) {
         const body = await response.json();
@@ -307,23 +309,25 @@ export default function ApprovalsPage() {
                         minute: "2-digit",
                       })}
                     </span>
-                    {(item.status === "pending_review" || item.status === "pending_approval") && (
+                    {(item.status === "pending_review" || item.status === "pending_approval" || item.status === "ai_evaluation_failed") && (
                       <div className="compact-review-actions" onClick={(event) => event.stopPropagation()}>
                         <button
                           type="button"
                           className="compact-review-action reject"
                           disabled={busyId === item.id}
                           onClick={() => void decide(item.id, "reject")}
+                          title="Reject request directly from list"
                         >
-                          {busyId === item.id && busyAction === "reject" ? "Rejecting…" : "Reject"}
+                          {busyId === item.id && busyAction === "reject" ? "Rejecting…" : "✕ Reject"}
                         </button>
                         <button
                           type="button"
                           className="compact-review-action approve"
                           disabled={busyId === item.id}
                           onClick={() => void decide(item.id, "approve")}
+                          title="Approve decision directly from list"
                         >
-                          {busyId === item.id && busyAction === "approve" ? "Approving…" : "Approve"}
+                          {busyId === item.id && busyAction === "approve" ? "Approving…" : "✓ Approve"}
                         </button>
                       </div>
                     )}
@@ -435,7 +439,7 @@ export default function ApprovalsPage() {
                         </div>
                       </div>
                       <div className="ticket-header-meta" style={{ display: "flex", gap: "8px", alignItems: "center" }}>
-                        {(selectedItem.status === "pending_review" || selectedItem.status === "pending_approval") && (
+                        {(selectedItem.status === "pending_review" || selectedItem.status === "pending_approval" || selectedItem.status === "ai_evaluation_failed") && (
                           <button
                             type="button"
                             onClick={() => setIsEditingDraft((prev) => !prev)}
@@ -515,6 +519,18 @@ export default function ApprovalsPage() {
                   </div>
                 ) : null}
 
+                {/* Failure Diagnostic Alert */}
+                {selectedItem.decision_output?.error ? (
+                  <div className="ticket-card" style={{ borderLeft: "3px solid #d93025", background: "#fdf3f2", borderRadius: "8px", padding: "12px 14px", margin: "14px 0" }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: "8px", color: "#c5221f", fontWeight: 650, fontSize: "13px" }}>
+                      <span>⚠️</span> Failure Diagnostic
+                    </div>
+                    <p style={{ margin: "6px 0 0", fontSize: "12px", color: "#3c4043", lineHeight: 1.5, wordBreak: "break-word" }}>
+                      {selectedItem.decision_output.error}
+                    </p>
+                  </div>
+                ) : null}
+
                 {/* 3. Quiet Metadata Strip (Everything else just shows the info) */}
                 <div className="drawer-info-strip">
                   <div className="info-strip-cell">
@@ -563,7 +579,7 @@ export default function ApprovalsPage() {
               </div>
 
               {/* Sticky Footer Action Bar */}
-              {selectedItem.status === "pending_review" || selectedItem.status === "pending_approval" ? (
+              {selectedItem.status === "pending_review" || selectedItem.status === "pending_approval" || selectedItem.status === "ai_evaluation_failed" ? (
                 <div className="drawer-footer">
                   <button
                     className="drawer-btn reject"
