@@ -90,68 +90,171 @@ async def generate_embeddings_batch(contents: list[str]) -> list:
     raise RuntimeError(f"Embedding batch failed across models: {last_err}")
 
 
-async def generate_workflow_decision(prompt: str) -> dict:
-    """
-    Evaluates workflow decision using Gemini, with an automatic fallback to Groq
-    if Gemini encounters a rate limit, quota, network error, or invalid output.
-    """
-    gemini_error = None
+GROQ_MODELS_CASCADE = [
+    "openai/gpt-oss-120b",
+    "openai/gpt-oss-20b",
+    "qwen/qwen3.8-27b",
+    "llama-3.3-70b-versatile",
+    "llama-3.1-8b-instant",
+]
 
-    # 1. Primary: Google Gemini
-    try:
-        response = await asyncio.to_thread(
-            client.models.generate_content,
-            model=LLM_MODEL,
-            contents=[prompt],
-            config={"response_mime_type": "application/json"}
-        )
-        raw_text = (response.text or "").strip()
-        raw_text = re.sub(r"^```(?:json)?\s*", "", raw_text, flags=re.IGNORECASE)
-        raw_text = re.sub(r"\s*```$", "", raw_text)
-        decision = WorkflowDecision.model_validate(json.loads(raw_text.strip())).model_dump()
-        decision["ai_provider"] = "gemini"
-        return decision
-    except Exception as e:
-        gemini_error = str(e)
-        print(f"[AI EVALUATION] Gemini primary failed: {type(e).__name__} - {gemini_error}")
 
-    # 2. Secondary Fallback: Groq (if configured)
-    groq_key = os.getenv("GROQ_API_KEY") or GROQ_API_KEY
-    if groq_key and groq_key.strip():
-        active_groq_model = os.getenv("GROQ_MODEL") or GROQ_MODEL or "llama-3.3-70b-versatile"
+async def generate_chat_response_groq(messages: list[dict], temperature: float = 0.2) -> str:
+    """
+    Direct Groq chat completion for Policy Copilot Q&A.
+    Iterates through the model cascade (120B -> 20B -> Qwen -> Llama) so it never breaks.
+    """
+    groq_key = (os.getenv("GROQ_API_KEY") or GROQ_API_KEY or "").strip()
+    if not groq_key:
+        raise RuntimeError("GROQ_API_KEY is not configured in environment.")
+
+    configured_model = (os.getenv("GROQ_MODEL") or GROQ_MODEL or "").strip()
+    models_to_try = [configured_model] + GROQ_MODELS_CASCADE
+    models_to_try = [m for m in dict.fromkeys(models_to_try) if m]
+
+    last_error = None
+    for model_name in models_to_try:
         try:
-            print(f"[AI EVALUATION] Attempting Groq fallback using model {active_groq_model}...")
-            async with httpx.AsyncClient(timeout=15.0) as http_client:
-                groq_resp = await http_client.post(
+            async with httpx.AsyncClient(timeout=20.0) as http_client:
+                response = await http_client.post(
                     "https://api.groq.com/openai/v1/chat/completions",
                     headers={
-                        "Authorization": f"Bearer {groq_key.strip()}",
+                        "Authorization": f"Bearer {groq_key}",
                         "Content-Type": "application/json",
                     },
                     json={
-                        "model": active_groq_model,
-                        "messages": [
-                            {
-                                "role": "system",
-                                "content": "You are a customer support copilot decision engine. You must output only a valid, strict JSON object following the schema requested by the user."
-                            },
-                            {"role": "user", "content": prompt}
-                        ],
-                        "response_format": {"type": "json_object"},
-                        "temperature": 0.1,
-                    }
+                        "model": model_name,
+                        "messages": messages,
+                        "temperature": temperature,
+                    },
                 )
-                groq_resp.raise_for_status()
-                groq_json = groq_resp.json()
-                raw_text = groq_json["choices"][0]["message"]["content"].strip()
-                raw_text = re.sub(r"^```(?:json)?\s*", "", raw_text, flags=re.IGNORECASE)
-                raw_text = re.sub(r"\s*```$", "", raw_text)
-                decision = WorkflowDecision.model_validate(json.loads(raw_text.strip())).model_dump()
-                decision["ai_provider"] = f"groq:{active_groq_model}"
-                print(f"[AI EVALUATION] Groq fallback succeeded with decision: {decision.get('decision')}")
-                return decision
-        except Exception as groq_err:
-            print(f"[AI EVALUATION] Groq fallback failed: {type(groq_err).__name__} - {groq_err}")
-            raise RuntimeError(f"Gemini failed ({gemini_error}); Groq fallback failed ({groq_err})")
+                if response.status_code == 200:
+                    data = response.json()
+                    content = (data["choices"][0]["message"].get("content") or "").strip()
+                    if not content and data["choices"][0]["message"].get("reasoning"):
+                        content = data["choices"][0]["message"]["reasoning"].strip()
+                    if content:
+                        print(f"[GROQ CHAT] Generated answer using model '{model_name}'")
+                        return content
+                else:
+                    err_msg = response.text
+                    print(f"[GROQ CHAT] Model '{model_name}' returned HTTP {response.status_code}: {err_msg}. Trying fallback...")
+                    last_error = f"{model_name} (HTTP {response.status_code}): {err_msg}"
+        except Exception as e:
+            print(f"[GROQ CHAT] Model '{model_name}' failed with {type(e).__name__}: {e}. Trying fallback...")
+            last_error = f"{model_name}: {e}"
 
-    raise RuntimeError(f"Gemini evaluation failed: {gemini_error}")
+    raise RuntimeError(f"All Groq models failed. Last error: {last_error}")
+
+
+def _normalize_workflow_decision(data: dict) -> dict:
+    """Safely normalizes LLM JSON output to conform strictly to WorkflowDecision schema."""
+    decision_raw = str(data.get("decision") or data.get("action") or "ESCALATE").upper()
+    if "APPROV" in decision_raw:
+        clean_decision = "APPROVE"
+    elif "REJECT" in decision_raw or "DENY" in decision_raw:
+        clean_decision = "REJECT"
+    elif "REPLY" in decision_raw:
+        clean_decision = "REPLY"
+    else:
+        clean_decision = "ESCALATE"
+
+    try:
+        conf_val = float(data.get("confidence", 0.85))
+        confidence = max(0.0, min(1.0, conf_val))
+    except (ValueError, TypeError):
+        confidence = 0.85
+
+    reasoning = str(data.get("reasoning") or data.get("explanation") or data.get("reason") or "Evaluated against policy.").strip()
+    action_payload = data.get("action_payload")
+    if not isinstance(action_payload, dict):
+        action_payload = {"message": str(data.get("message") or reasoning)}
+
+    return {
+        "decision": clean_decision,
+        "confidence": confidence,
+        "reasoning": reasoning,
+        "action_payload": action_payload,
+    }
+
+
+async def generate_workflow_decision(prompt: str) -> dict:
+    """
+    Evaluates workflow decision using Groq as primary engine with json_mode
+    and automatic cascade across models, falling back to Gemini if needed.
+    """
+    groq_key = (os.getenv("GROQ_API_KEY") or GROQ_API_KEY or "").strip()
+    if groq_key:
+        configured_model = (os.getenv("GROQ_MODEL") or GROQ_MODEL or "").strip()
+        models_to_try = [configured_model] + GROQ_MODELS_CASCADE
+        models_to_try = [m for m in dict.fromkeys(models_to_try) if m]
+
+        for model_name in models_to_try:
+            try:
+                async with httpx.AsyncClient(timeout=15.0) as http_client:
+                    groq_resp = await http_client.post(
+                        "https://api.groq.com/openai/v1/chat/completions",
+                        headers={
+                            "Authorization": f"Bearer {groq_key}",
+                            "Content-Type": "application/json",
+                        },
+                        json={
+                            "model": model_name,
+                            "messages": [
+                                {
+                                    "role": "system",
+                                    "content": (
+                                        "You are a customer support copilot decision engine. You must output only a valid JSON object matching this schema: "
+                                        "{\"decision\": \"APPROVE\"|\"REJECT\"|\"ESCALATE\"|\"REPLY\", \"confidence\": <float between 0.0 and 1.0>, "
+                                        "\"reasoning\": \"<explanation>\", \"action_payload\": {\"message\": \"<summary or reply>\"}}"
+                                    )
+                                },
+                                {"role": "user", "content": prompt}
+                            ],
+                            "response_format": {"type": "json_object"},
+                            "temperature": 0.1,
+                        }
+                    )
+                    if groq_resp.status_code == 200:
+                        groq_json = groq_resp.json()
+                        raw_text = groq_json["choices"][0]["message"]["content"].strip()
+                        raw_text = re.sub(r"^```(?:json)?\s*", "", raw_text, flags=re.IGNORECASE)
+                        raw_text = re.sub(r"\s*```$", "", raw_text)
+                        parsed = json.loads(raw_text.strip())
+                        normalized = _normalize_workflow_decision(parsed)
+                        decision = WorkflowDecision.model_validate(normalized).model_dump()
+                        decision["ai_provider"] = f"groq:{model_name}"
+                        print(f"[AI EVALUATION] Groq succeeded with model '{model_name}': {decision.get('decision')}")
+                        return decision
+                    else:
+                        print(f"[AI EVALUATION] Groq model '{model_name}' returned {groq_resp.status_code}: {groq_resp.text}. Trying next...")
+            except Exception as e:
+                print(f"[AI EVALUATION] Groq model '{model_name}' failed: {e}. Trying next...")
+
+    # Fallback to Google Gemini
+    configured_gemini = os.getenv("LLM_MODEL") or LLM_MODEL or "gemini-3.8-flash"
+    gemini_models = [configured_gemini, "gemini-3.8-flash", "gemini-2.0-flash"]
+    gemini_models = list(dict.fromkeys(gemini_models))
+    last_gemini_err = None
+
+    for g_model in gemini_models:
+        try:
+            response = await asyncio.to_thread(
+                client.models.generate_content,
+                model=g_model,
+                contents=[prompt],
+                config={"response_mime_type": "application/json"}
+            )
+            raw_text = (response.text or "").strip()
+            raw_text = re.sub(r"^```(?:json)?\s*", "", raw_text, flags=re.IGNORECASE)
+            raw_text = re.sub(r"\s*```$", "", raw_text)
+            parsed = json.loads(raw_text.strip())
+            normalized = _normalize_workflow_decision(parsed)
+            decision = WorkflowDecision.model_validate(normalized).model_dump()
+            decision["ai_provider"] = f"gemini:{g_model}"
+            return decision
+        except Exception as e:
+            last_gemini_err = e
+            print(f"[AI EVALUATION] Gemini '{g_model}' failed: {e}")
+
+    raise RuntimeError(f"Workflow decision evaluation failed: {last_gemini_err}")
