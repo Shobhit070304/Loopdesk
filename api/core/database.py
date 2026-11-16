@@ -2,6 +2,7 @@ import os
 import json
 import uuid
 from pathlib import Path
+from contextlib import asynccontextmanager
 import asyncpg
 import redis.asyncio as redis
 from core.config import DB_URL, REDIS_URL
@@ -243,4 +244,24 @@ async def _seed_demo_workspace(conn):
             'Alex Vance (Demo Operator)'
         );
     """, wf_id)
+
+
+async def close_db(app):
+    """Closes PostgreSQL connection pool and Redis client gracefully."""
+    if getattr(app.state, "pool", None):
+        await app.state.pool.close()
+    if getattr(app.state, "redis", None):
+        try:
+            await app.state.redis.close()
+        except Exception:
+            pass
+
+
+@asynccontextmanager
+async def lifespan(app):
+    """FastAPI Lifespan context manager that handles startup and shutdown."""
+    await init_db(app)
+    yield
+    await close_db(app)
+
 
