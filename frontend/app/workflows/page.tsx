@@ -487,14 +487,14 @@ export default function WorkflowsPage() {
                           onClick={() => setExpandedWebhookId(isExpanded ? null : workflow.id)}
                           title="View inbound email webhook details and sandbox trace"
                         >
-                          <span>🧪</span> {isExpanded ? "Hide Sandbox & Webhook" : "Trace Sandbox & Webhook"}
+                          {isExpanded ? "Hide Sandbox & Webhook" : "Trace Sandbox & Webhook"}
                         </button>
                         <button
                           className="workflow-edit-btn"
                           onClick={() => startEditingWorkflow(workflow)}
                           title={`Edit ${workflow.name} settings and instructions`}
                         >
-                          ✎ Edit
+                          Edit
                         </button>
                         <button
                           className="workflow-delete"
@@ -512,7 +512,7 @@ export default function WorkflowsPage() {
                       <div className="workflow-webhook-panel">
                         <div className="webhook-panel-header">
                           <h3>
-                            <span>⚡</span> Inbound Email Ingestion Webhook
+                            Inbound Email Ingestion Webhook
                             <span className={`webhook-status-badge ${isEnabled ? "active" : "inactive"}`}>
                               {isEnabled ? "Live & Listening" : "Paused"}
                             </span>
@@ -591,7 +591,7 @@ export default function WorkflowsPage() {
                         <div className="trace-sandbox-container">
                           <div className="trace-sandbox-header">
                             <div className="trace-sandbox-title">
-                              <h4><span>🧪</span> Interactive Execution Trace & Webhook Sandbox</h4>
+                              <h4>Interactive Execution Trace & Webhook Sandbox</h4>
                               <p>Simulate customer email inquiries through the 4-stage pipeline with real-time latency telemetry, vector similarity scores, and zero external side effects.</p>
                             </div>
                             <button
@@ -645,7 +645,7 @@ export default function WorkflowsPage() {
                                 </div>
                                 <div className="trace-summary-metrics">
                                   <span>Total Pipeline Latency:</span>
-                                  <span className="trace-latency-pill">⚡ {trace.total_latency_ms} ms</span>
+                                  <span className="trace-latency-pill">{trace.total_latency_ms} ms</span>
                                 </div>
                               </div>
 
@@ -663,7 +663,7 @@ export default function WorkflowsPage() {
                                     <div><strong>Sender:</strong> {trace.stages[0].sender}</div>
                                     <div><strong>Subject:</strong> {trace.stages[0].subject}</div>
                                     <div><strong>Payload:</strong> {trace.stages[0].payload_bytes} bytes</div>
-                                    <div><strong>Status:</strong> <span style={{ color: "#34d399", fontWeight: 600 }}>✓ {trace.stages[0].status}</span></div>
+                                    <div><strong>Status:</strong> <span style={{ color: "#34d399", fontWeight: 600 }}>{trace.stages[0].status}</span></div>
                                   </div>
                                 </div>
                               )}

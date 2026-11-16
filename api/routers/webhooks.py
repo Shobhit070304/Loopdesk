@@ -147,5 +147,5 @@ async def handle_inbound_webhook(webhook_token: str, request: Request):
                 raise HTTPException(status_code=422, detail="Idempotency key must be between 1 and 255 characters.")
 
         return await evaluate_and_execute_workflow(
-            conn, wf, event_text, normalized_metadata, source="inbound_webhook", idempotency_key=idempotency_key
+            request.app, conn, wf, event_text, normalized_metadata, source="inbound_webhook", idempotency_key=idempotency_key
         )

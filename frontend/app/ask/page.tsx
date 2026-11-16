@@ -30,6 +30,21 @@ function isConversation(value: unknown): value is Conversation {
   );
 }
 
+function formatErrorDetail(detail: unknown, fallback: string): string {
+  if (typeof detail === "string") return detail;
+  if (Array.isArray(detail)) {
+    return detail
+      .map((err) => (typeof err === "object" && err && "msg" in err ? String((err as { msg: unknown }).msg) : JSON.stringify(err)))
+      .join("; ");
+  }
+  if (detail && typeof detail === "object") {
+    if ("msg" in detail) return String((detail as { msg: unknown }).msg);
+    if ("detail" in detail) return formatErrorDetail((detail as { detail: unknown }).detail, fallback);
+    return JSON.stringify(detail);
+  }
+  return fallback;
+}
+
 export default function AskPage() {
   const { user } = useAuth();
   const [conversations, setConversations] = useState<Conversation[]>([]);
@@ -149,11 +164,11 @@ export default function AskPage() {
       const response = await fetch("/api/backend/ask", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ question: query }),
+        body: JSON.stringify({ query, question: query }),
       });
       const data = await response.json();
       if (!response.ok) {
-        throw new Error(data.detail || "The assistant could not retrieve policy answers right now.");
+        throw new Error(formatErrorDetail(data?.detail, "The assistant could not retrieve policy answers right now."));
       }
       setConversations((current) =>
         current.map((c) =>
@@ -175,17 +190,12 @@ export default function AskPage() {
       active="ask"
       title="Policy Copilot"
       flush={true}
-      actions={
-        <button className="button-primary" onClick={startNewChat} style={{ padding: "7px 14px", fontSize: "12px" }}>
-          <span>＋</span> New Chat
-        </button>
-      }
     >
       <div className="copilot-container">
         {/* ── Left Sidebar History ──────────────────────────────────── */}
         <aside className="copilot-sidebar">
           <button className="copilot-new-chat-btn" onClick={startNewChat}>
-            <span>＋</span> New Conversation
+            + New Conversation
           </button>
 
           <div className="copilot-history-header">
@@ -298,7 +308,7 @@ export default function AskPage() {
                           }}
                           title="Copy response to clipboard"
                         >
-                          {copiedIndex === index ? "✓ Copied" : "📋 Copy answer"}
+                          {copiedIndex === index ? "Copied" : "Copy answer"}
                         </button>
                       </div>
                     )}

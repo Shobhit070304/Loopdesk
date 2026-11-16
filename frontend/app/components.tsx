@@ -147,12 +147,12 @@ export function BrandMark({ size = 32, className = "" }: { size?: number; classN
 
 export type NavSection = "home" | "documents" | "ask" | "workflows" | "approvals" | "profile" | "help" | "dashboard" | "blogs";
 
-const sidebarNavItems: { href: string; label: string; icon: string; id: NavSection }[] = [
-  { href: "/dashboard", label: "Analytics", icon: "📊", id: "dashboard" },
-  { href: "/workflows", label: "Workflows", icon: "⚡", id: "workflows" },
-  { href: "/approvals", label: "Review Queue", icon: "📥", id: "approvals" },
-  { href: "/documents", label: "Knowledge Base", icon: "📚", id: "documents" },
-  { href: "/ask", label: "Policy Copilot", icon: "💬", id: "ask" },
+const sidebarNavItems: { href: string; label: string; id: NavSection }[] = [
+  { href: "/dashboard", label: "Analytics", id: "dashboard" },
+  { href: "/workflows", label: "Workflows", id: "workflows" },
+  { href: "/approvals", label: "Review Queue", id: "approvals" },
+  { href: "/documents", label: "Knowledge Base", id: "documents" },
+  { href: "/ask", label: "Policy Copilot", id: "ask" },
 ];
 
 /**
@@ -222,7 +222,6 @@ export function DashboardLayout({
                 onClick={() => setMobileMenuOpen(false)}
                 className={`sidebar-nav-item ${isActive ? "active" : ""}`}
               >
-                <span className="sidebar-nav-icon">{item.icon}</span>
                 <span>{item.label}</span>
                 {item.id === "workflows" && (
                   <span className="sidebar-item-badge">Trace</span>

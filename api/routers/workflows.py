@@ -496,7 +496,11 @@ async def simulate_workflow_execution(workflow_id: int, request: Request, req: W
 
     # 2. Knowledge Retrieval Trace
     t1 = time.perf_counter()
-    retrieval = await hybrid_search(app, event_text, top_k=3, workspace=active_workspace)
+    try:
+        retrieval = await hybrid_search(app, event_text, top_k=3, workspace=active_workspace)
+    except Exception as search_err:
+        print(f"[SIMULATE WARNING] Knowledge retrieval failed: {search_err}")
+        retrieval = {"query": event_text, "results": []}
     stage2_ms = round((time.perf_counter() - t1) * 1000, 2)
     retrieved_items = retrieval.get("results", [])
 
@@ -547,7 +551,14 @@ async def simulate_workflow_execution(workflow_id: int, request: Request, req: W
         }}
     }}
     """
-    decision = await generate_workflow_decision(prompt)
+    try:
+        decision = await generate_workflow_decision(prompt)
+    except Exception as ai_err:
+        print(f"[SIMULATE ERROR] AI generation failed: {ai_err}")
+        raise HTTPException(
+            status_code=502,
+            detail=f"AI model evaluation failed: {str(ai_err)}. Please ensure GEMINI_API_KEY is configured in your Render environment variables."
+        )
     stage3_ms = round((time.perf_counter() - t2) * 1000, 2)
 
     stage3 = {

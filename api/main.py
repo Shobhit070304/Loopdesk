@@ -46,6 +46,14 @@ async def require_signed_session(request: Request, call_next):
         return JSONResponse({"detail": "A valid Google sign-in session is required."}, status_code=401)
     return await call_next(request)
 
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception):
+    print(f"[UNHANDLED EXCEPTION] {request.method} {request.url.path}: {exc}")
+    return JSONResponse(
+        status_code=500,
+        content={"detail": f"Server processing error: {str(exc)}"}
+    )
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=CORS_ORIGINS,

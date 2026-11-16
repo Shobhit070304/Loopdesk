@@ -18,7 +18,8 @@ class ChatMessage(BaseModel):
     content: str
 
 class AskRequest(BaseModel):
-    query: str = Field(..., min_length=1, max_length=1_000)
+    query: Optional[str] = None
+    question: Optional[str] = None
     history: Optional[List[ChatMessage]] = None
 
 
@@ -26,6 +27,11 @@ class AskRequest(BaseModel):
 async def ask_rag(request: Request, body: AskRequest):
     app = request.app
     active_workspace = workspace_id(request)
+    query_text = (body.query or body.question or "").strip()
+    if not query_text:
+        raise HTTPException(status_code=422, detail="A non-empty question is required.")
+    if len(query_text) > 1000:
+        raise HTTPException(status_code=422, detail="Question must be 1,000 characters or fewer.")
 
     # Portfolio limits: 10 queries/minute speed throttle, 50 queries/day per account
     if getattr(app.state, "redis", None):
@@ -61,7 +67,7 @@ async def ask_rag(request: Request, body: AskRequest):
     # 1. L1 exact-match cache (bypassed if multi-turn history exists)
     if not has_history and getattr(app.state, "redis", None):
         try:
-            q_hash = cache_key(active_workspace, body.query)
+            q_hash = cache_key(active_workspace, query_text)
             cached_response = await app.state.redis.get(f"cache:{active_workspace}:{q_hash}")
             if cached_response:
                 try:
@@ -69,7 +75,7 @@ async def ask_rag(request: Request, body: AskRequest):
                 except Exception:
                     pass
                 return {
-                    "query": body.query,
+                    "query": query_text,
                     "answer": cached_response,
                     "source": "cache",
                     "similarity": 1.0,
@@ -82,7 +88,7 @@ async def ask_rag(request: Request, body: AskRequest):
         query_embedding = await asyncio.to_thread(
             client.models.embed_content,
             model=EMBEDDING_MODEL,
-            contents=body.query,
+            contents=query_text,
             config={"output_dimensionality": 768}
         )
         raw_embedding = query_embedding.embeddings[0].values
@@ -100,7 +106,7 @@ async def ask_rag(request: Request, body: AskRequest):
                     except Exception:
                         pass
                 return {
-                    "query": body.query,
+                    "query": query_text,
                     "answer": cache_result["answer"],
                     "source": "cache",
                     "similarity": cache_result["similarity"]
@@ -109,12 +115,12 @@ async def ask_rag(request: Request, body: AskRequest):
             print(f"[CACHE WARNING] L2 semantic cache check skipped: {l2_err}")
 
     # 4. Cache Miss - Hybrid Search
-    retrieval_result = await hybrid_search(app, body.query, top_k=3, workspace=active_workspace, raw_embedding=raw_embedding)
+    retrieval_result = await hybrid_search(app, query_text, top_k=3, workspace=active_workspace, raw_embedding=raw_embedding)
     retrieved_docs = retrieval_result.get("results", [])
 
     if not retrieved_docs:
         return {
-            "query": body.query,
+            "query": query_text,
             "answer": "No relevant documents found in knowledge base.",
             "source": "empty"
         }
@@ -143,7 +149,7 @@ async def ask_rag(request: Request, body: AskRequest):
     {context_text}
 
     {conversation_history_text}CURRENT SUPPORT QUESTION:
-    {body.query}
+    {query_text}
     """
 
     generated_text = ""
@@ -189,12 +195,12 @@ async def ask_rag(request: Request, body: AskRequest):
     # 6. Cache the response
     if not has_history:
         try:
-            await save_to_cache(app, active_workspace, body.query, raw_embedding, generated_text)
+            await save_to_cache(app, active_workspace, query_text, raw_embedding, generated_text)
         except Exception as cache_save_err:
             print(f"[CACHE WARNING] Save to cache skipped: {cache_save_err}")
 
     return {
-        "query": body.query,
+        "query": query_text,
         "answer": generated_text,
         "source": "documents_retrieved",
         "sources": [{"filename": item["filename"], "chunk_id": item["id"]} for item in retrieved_docs],
