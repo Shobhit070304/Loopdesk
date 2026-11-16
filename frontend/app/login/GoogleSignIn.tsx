@@ -46,7 +46,7 @@ export function GoogleSignIn() {
           });
           const data = await response.json();
           if (!response.ok) throw new Error(data.detail || "Google sign-in could not be completed.");
-          window.location.assign("/profile");
+          window.location.assign("/dashboard");
         } catch (reason) {
           setError(reason instanceof Error ? reason.message : "Google sign-in could not be completed.");
           setBusy(false);
@@ -54,7 +54,7 @@ export function GoogleSignIn() {
       },
     });
     buttonRef.current.replaceChildren();
-    google.accounts.id.renderButton(buttonRef.current, { theme: "outline", size: "large", shape: "pill", text: "continue_with", width: 320, logo_alignment: "left" });
+    google.accounts.id.renderButton(buttonRef.current, { theme: "filled_black", size: "large", shape: "pill", text: "continue_with", width: 320, logo_alignment: "left" });
     initialized.current = true;
   }, [clientId]);
 

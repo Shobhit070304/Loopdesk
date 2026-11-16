@@ -33,7 +33,7 @@ The backend derives the workspace key from the signed Google subject. Documents,
 
 Requirements: Node.js 20+, Python 3.11+, PostgreSQL with pgvector, Redis, and a Gemini API key.
 
-1. Start local PostgreSQL (with pgvector extension) and Redis, or connect to compatible managed cloud services (e.g. Neon, Supabase, Upstash).
+1. Start Redis using Docker (`docker compose up -d redis`), or connect to a managed service like Upstash. Connect PostgreSQL with the pgvector extension (e.g. Neon, Supabase, or local Postgres).
 2. Create `api/.env` from `api/.env.example`. Configure `DB_URL`, `REDIS_URL`, `GEMINI_API_KEY`, `AUTH_GOOGLE_ID`, and a random `AUTH_SECRET` of at least 32 characters.
 3. Install and start FastAPI:
 

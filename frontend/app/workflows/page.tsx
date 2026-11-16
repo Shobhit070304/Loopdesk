@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { Nav } from "../components";
+import { DashboardLayout } from "../components";
 
 const API = "/api/backend";
 
@@ -56,42 +56,94 @@ type Template = {
   name: string;
   description: string;
   prompt: string;
-  action: "webhook" | "slack" | "email";
+  action: "email";
   approval: boolean;
 };
 
-type WorkflowTestResult = {
-  decision?: {
+type ExecutionTraceChunk = {
+  id: number;
+  filename: string;
+  similarity_score: number;
+  excerpt: string;
+};
+
+type OutboundEmailPreview = {
+  channel: string;
+  to: string;
+  subject: string;
+  body: string;
+  headers: Record<string, string>;
+  dispatch_url: string;
+};
+
+type ExecutionTraceStage = {
+  stage: string;
+  latency_ms: number;
+  // Stage 1
+  channel?: string;
+  sender?: string;
+  subject?: string;
+  payload_bytes?: number;
+  status?: string;
+  sanitized_text?: string;
+  // Stage 2
+  retrieved_count?: number;
+  chunks?: ExecutionTraceChunk[];
+  context_found?: boolean;
+  // Stage 3
+  provider?: string;
+  decision?: string;
+  confidence?: number;
+  reasoning?: string;
+  prompt_tokens_est?: number;
+  completion_tokens_est?: number;
+  // Stage 4
+  dry_run?: boolean;
+  dispatched?: boolean;
+  payload?: OutboundEmailPreview;
+};
+
+type ExecutionTraceResult = {
+  workflow_id: number;
+  workflow_name: string;
+  mode: string;
+  total_latency_ms: number;
+  stages: ExecutionTraceStage[];
+  decision: {
     decision?: string;
     confidence?: number;
     reasoning?: string;
+    ai_provider?: string;
+    action_payload?: {
+      message?: string;
+      recipient?: string;
+    };
   };
-  requires_human_approval?: boolean;
 };
 
 const examples: Template[] = [
   {
-    icon: "↩",
-    name: "Returns & refunds",
-    description: "Triage refund requests against your policy.",
-    prompt: "Evaluate the customer’s request against our return window and condition guidelines. Approve eligible refunds and explain the policy reason for ineligible requests.",
-    action: "webhook",
+    icon: "✉",
+    name: "Returns & refunds email responder",
+    description: "Triage customer refund email requests against return policy.",
+    prompt: "Evaluate the customer's email request against our 30-day return window and condition guidelines. Approve eligible refunds and explain the exact policy reason for ineligible requests.",
+    action: "email",
     approval: true,
   },
   {
-    icon: "◉",
-    name: "Priority escalation",
-    description: "Spot service issues that need a fast response.",
-    prompt: "Identify production incidents and priority SLA breaches. Escalate critical service disruption with a concise incident summary; otherwise suggest a helpful first response.",
-    action: "slack",
+    icon: "🧾",
+    name: "Billing & invoice inquiry responder",
+    description: "Clarify subscription charges and payment discrepancies via email.",
+    prompt: "Analyze billing questions against company pricing and billing policy. Provide a clear, polite itemized breakdown and suggest next steps.",
+    action: "email",
     approval: false,
   },
   {
-    icon: "▤",
-    name: "Contract review",
-    description: "Flag contract terms that need a closer look.",
-    prompt: "Review vendor contract terms against our approved liability and payment guidelines. Explain any clauses that require legal review.",
-    action: "webhook",
+    icon: "🛠",
+    name: "Product warranty & technical triage",
+    description: "Verify warranty coverage and provide troubleshooting steps via email.",
+    prompt: "Review the customer's issue description against standard hardware warranty coverage. If covered under warranty, provide replacement instructions; otherwise provide troubleshooting steps.",
+    action: "email",
     approval: true,
   },
 ];
@@ -101,7 +153,7 @@ export default function WorkflowsPage() {
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
   const [prompt, setPrompt] = useState("");
-  const [action, setAction] = useState<"webhook" | "slack" | "email">("webhook");
+  const [action, setAction] = useState<"email">("email");
   const [url, setUrl] = useState("");
   const [approval, setApproval] = useState(true);
   const [activeExample, setActiveExample] = useState("");
@@ -110,15 +162,19 @@ export default function WorkflowsPage() {
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
 
-  // Extension 4: Inbound Webhook State
+  // Inbound Webhooks & Dry-Run Trace Sandbox State
   const [expandedWebhookId, setExpandedWebhookId] = useState<number | null>(null);
   const [revealedSecrets, setRevealedSecrets] = useState<Record<number, boolean>>({});
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
   const [origin, setOrigin] = useState("");
   const [modeSavingId, setModeSavingId] = useState<number | null>(null);
-  const [testingWorkflowId, setTestingWorkflowId] = useState<number | null>(null);
-  const [testResult, setTestResult] = useState<Record<number, WorkflowTestResult>>({});
-  const [customTestText, setCustomTestText] = useState<Record<number, string>>({});
+
+  // Feature 2: Interactive Execution Trace State
+  const [simulatingWorkflowId, setSimulatingWorkflowId] = useState<number | null>(null);
+  const [traceResults, setTraceResults] = useState<Record<number, ExecutionTraceResult>>({});
+  const [testEmail, setTestEmail] = useState<Record<number, string>>({});
+  const [testSubject, setTestSubject] = useState<Record<number, string>>({});
+  const [testBody, setTestBody] = useState<Record<number, string>>({});
 
   useEffect(() => {
     if (typeof window !== "undefined") {
@@ -157,7 +213,7 @@ export default function WorkflowsPage() {
     setName(workflow.name);
     setDescription(workflow.description || "");
     setPrompt(workflow.system_prompt);
-    setAction((workflow.action_type as "webhook" | "slack" | "email") || "webhook");
+    setAction("email");
     setUrl(workflow.action_url || "");
     setApproval((workflow.execution_mode || (workflow.require_approval ? "manual" : "automatic")) === "manual");
     setActiveExample("");
@@ -193,7 +249,7 @@ export default function WorkflowsPage() {
             name: name.trim(),
             description: description.trim() || null,
             system_prompt: prompt.trim(),
-            action_type: action,
+            action_type: "email",
             action_url: url.trim() || null,
             execution_mode: approval ? "manual" : "automatic",
           }),
@@ -214,7 +270,7 @@ export default function WorkflowsPage() {
             name: name.trim(),
             description: description.trim() || null,
             system_prompt: prompt.trim(),
-            action_type: action,
+            action_type: "email",
             action_url: url.trim() || null,
             execution_mode: approval ? "manual" : "automatic",
             require_approval: approval,
@@ -301,7 +357,7 @@ export default function WorkflowsPage() {
   async function regenerateSecret(workflow: Workflow) {
     if (
       !window.confirm(
-        `Regenerate webhook credentials for “${workflow.name}”?\n\nAny external tool using the previous URL or secret will stop working until updated.`
+        `Regenerate webhook credentials for “${workflow.name}”?\n\nAny external mail forwarder using the previous URL or secret will stop working until updated.`
       )
     ) {
       return;
@@ -323,43 +379,45 @@ export default function WorkflowsPage() {
     }
   }
 
-  async function sendTestEvent(workflow: Workflow) {
-    setTestingWorkflowId(workflow.id);
+  async function runSimulation(workflow: Workflow) {
+    setSimulatingWorkflowId(workflow.id);
     setError("");
     setMessage("");
     try {
-      const payloadText = customTestText[workflow.id]?.trim() || `Test inquiry for ${workflow.name}: customer inquired about order status and policy requirements.`;
-      const res = await fetch(`${API}/workflows/${workflow.id}/webhook/test`, {
+      const customerEmail = (testEmail[workflow.id] || "customer@example.com").trim();
+      const subject = (testSubject[workflow.id] || `Inquiry regarding ${workflow.name}`).trim();
+      const bodyText = (testBody[workflow.id] || `Hello, I am writing to ask about my recent order and eligibility under the ${workflow.name} policy.`).trim();
+
+      const res = await fetch(`${API}/workflows/${workflow.id}/simulate`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ event_text: payloadText }),
+        body: JSON.stringify({
+          customer_email: customerEmail,
+          subject: subject,
+          event_text: bodyText,
+        }),
       });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.detail || "Failed to trigger test event.");
-      setTestResult((prev) => ({ ...prev, [workflow.id]: data }));
-      setMessage(`Test event evaluated for ${workflow.name}! Result: ${data.decision?.decision || "Completed"}.`);
-      await loadWorkflows();
+      const data = await readApiResponse<ExecutionTraceResult>(res, "run interactive execution trace");
+      setTraceResults((prev) => ({ ...prev, [workflow.id]: data }));
+      setMessage(`Interactive execution trace completed in ${data.total_latency_ms}ms.`);
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "Failed to run test event.");
+      setError(reason instanceof Error ? reason.message : "Failed to run execution trace.");
     } finally {
-      setTestingWorkflowId(null);
+      setSimulatingWorkflowId(null);
     }
   }
 
   return (
-    <div className="product-shell">
-      <Nav active="workflows" />
-      <main className="page-container workflow-page">
-        <header className="page-heading workflow-page-heading">
-          <div>
-            <p className="eyebrow">CUSTOMER OPERATIONS</p>
-            <h1>Workflows & Webhooks</h1>
-            <p>Build automated AI decisions, connect inbound webhooks from any tool, and route actions on autopilot.</p>
-          </div>
-          <a href="#workflow-builder" className="button-primary">
-            Create a workflow <span>↗</span>
-          </a>
-        </header>
+    <DashboardLayout
+      active="workflows"
+      title="Workflows & Execution Trace"
+      subtitle="Create automated AI email responders, connect inbound webhooks, and run dry-run trace simulations."
+      actions={
+        <a href="#workflow-builder" className="button-primary" style={{ padding: "7px 14px", fontSize: "12px" }}>
+          <span>+</span> Create a workflow
+        </a>
+      }
+    >
 
         {(error || message) && (
           <div
@@ -379,128 +437,12 @@ export default function WorkflowsPage() {
           </div>
         )}
 
-        <section className="workflow-workspace-grid">
-          <aside className="workflow-examples card">
-            <div className="workflow-panel-heading">
-              <p className="eyebrow">START WITH AN EXAMPLE</p>
-              <h2>Common workflows</h2>
-              <p>Choose a starting point. You can tailor every detail before saving.</p>
-            </div>
-            <div className="workflow-example-list">
-              {examples.map((example) => (
-                <button
-                  key={example.name}
-                  className={`workflow-example ${activeExample === example.name ? "selected" : ""}`}
-                  onClick={() => selectExample(example)}
-                >
-                  <span className="workflow-example-icon">{example.icon}</span>
-                  <span>
-                    <strong>{example.name}</strong>
-                    <small>{example.description}</small>
-                  </span>
-                  <span className="workflow-example-arrow">↗</span>
-                </button>
-              ))}
-            </div>
-          </aside>
-
-          <section className="workflow-builder card" id="workflow-builder">
-            <div className="workflow-panel-heading">
-              <p className="eyebrow">{editingWorkflowId ? "EDITING WORKFLOW" : "WORKFLOW CREATOR"}</p>
-              <h2>{editingWorkflowId ? `Edit “${name}”` : "Build a workflow"}</h2>
-              <p>{editingWorkflowId ? "Update instructions, mode, or dispatch destinations without losing execution history." : "Give it clear instructions and choose what happens after a decision."}</p>
-            </div>
-            <form className="workflow-form" onSubmit={(event) => void saveWorkflow(event)}>
-              <label>
-                Workflow name
-                <input
-                  required
-                  minLength={2}
-                  maxLength={100}
-                  value={name}
-                  onChange={(event) => setName(event.target.value)}
-                  placeholder="e.g. Refund request review"
-                />
-              </label>
-              <label>
-                Short description
-                <input
-                  maxLength={255}
-                  value={description}
-                  onChange={(event) => setDescription(event.target.value)}
-                  placeholder="What should this workflow handle?"
-                />
-              </label>
-              <label>
-                Decision instructions
-                <textarea
-                  required
-                  rows={5}
-                  maxLength={10000}
-                  value={prompt}
-                  onChange={(event) => setPrompt(event.target.value)}
-                  placeholder="Describe how to evaluate an incoming request…"
-                />
-              </label>
-              <div className="workflow-form-row">
-                <label>
-                  Next action
-                  <select value={action} onChange={(event) => setAction(event.target.value as typeof action)}>
-                    <option value="webhook">Generic webhook</option>
-                    <option value="slack">Slack via your webhook receiver</option>
-                    <option value="email">Email relay via your webhook receiver</option>
-                  </select>
-                </label>
-                <label>
-                  Outbound Action URL <span>(optional; required to send an external action)</span>
-                  <input
-                    type="url"
-                    value={url}
-                    onChange={(event) => setUrl(event.target.value)}
-                    placeholder="https://your-api.com/dispatch"
-                  />
-                </label>
-              </div>
-              <fieldset className="workflow-mode-selector">
-                <legend>Execution mode <small>Applies to every event received by this workflow.</small></legend>
-                <div>
-                  <button type="button" className={approval ? "selected" : ""} aria-pressed={approval} onClick={() => setApproval(true)}>
-                    <strong>Manual review</strong><small>Pause every result in the review queue. A person decides whether to send the configured action.</small>
-                  </button>
-                  <button type="button" className={!approval ? "selected" : ""} aria-pressed={!approval} onClick={() => setApproval(false)}>
-                    <strong>Automatic</strong><small>Run every event without per-query approval. External actions send only when a destination is configured.</small>
-                  </button>
-                </div>
-              </fieldset>
-              <div style={{ display: "flex", gap: "10px", alignItems: "center" }}>
-                <button
-                  className="button-primary workflow-save"
-                  type="submit"
-                  disabled={busy || !name.trim() || !prompt.trim()}
-                >
-                  {busy ? "Saving…" : editingWorkflowId ? "Save changes" : "Create workflow"}
-                  <span>↗</span>
-                </button>
-                {editingWorkflowId && (
-                  <button
-                    type="button"
-                    className="workflow-cancel-btn"
-                    onClick={cancelEditing}
-                  >
-                    Cancel edit
-                  </button>
-                )}
-              </div>
-            </form>
-          </section>
-        </section>
-
         <section className="workflow-created card" aria-labelledby="saved-workflows-title">
           <div className="workflow-saved-heading">
             <div className="workflow-panel-heading">
               <p className="eyebrow">YOUR WORKSPACE</p>
-              <h2 id="saved-workflows-title">Your workflows & inbound triggers</h2>
-            <p>Each workflow has a dedicated inbound webhook URL. Its manual or automatic mode applies to every event it receives.</p>
+              <h2 id="saved-workflows-title">Your email workflows & triggers</h2>
+              <p>Each workflow has a dedicated inbound webhook URL for email ingestion. Test them in the interactive sandbox below.</p>
             </div>
             <span className="workflow-total">
               {workflows.length} {workflows.length === 1 ? "workflow" : "workflows"}
@@ -509,8 +451,8 @@ export default function WorkflowsPage() {
 
           {workflows.length === 0 ? (
             <div className="workflow-created-empty">
-              <span>✳</span>
-              <strong>Your workflows will appear here.</strong>
+              <span>✉</span>
+              <strong>Your email workflows will appear here.</strong>
               <small>Start with an example or create one from scratch to get an inbound webhook link.</small>
             </div>
           ) : (
@@ -522,20 +464,19 @@ export default function WorkflowsPage() {
                   ? `${origin || "http://localhost:3000"}/api/webhooks/${workflow.webhook_token}`
                   : "";
                 const isEnabled = workflow.webhook_enabled !== false;
+                const trace = traceResults[workflow.id];
 
                 return (
                   <div key={workflow.id} style={{ display: "grid", gap: 0 }}>
                     <div className="workflow-created-item">
-                      <span className="workflow-created-icon">
-                        {workflow.action_type === "email" ? "✉" : workflow.action_type === "slack" ? "◉" : "↗"}
-                      </span>
+                      <span className="workflow-created-icon">✉</span>
                       <span className="workflow-created-copy">
                         <strong>{workflow.name}</strong>
-                        <small>{workflow.description || "Customer operations workflow"}</small>
+                        <small>{workflow.description || "Email customer operations workflow"}</small>
                       </span>
                       <div className="workflow-created-actions">
                         <span className="workflow-row-meta">{workflow.execution_count || 0} runs</span>
-                      <span className={`workflow-approval-tag ${(workflow.execution_mode || (workflow.require_approval ? "manual" : "automatic")) === "manual" ? "required" : "automatic"}`}>
+                        <span className={`workflow-approval-tag ${(workflow.execution_mode || (workflow.require_approval ? "manual" : "automatic")) === "manual" ? "required" : "automatic"}`}>
                           {(workflow.execution_mode || (workflow.require_approval ? "manual" : "automatic")) === "manual" ? "Manual review" : "Automatic"}
                         </span>
                         <button className="workflow-mode-switch" disabled={modeSavingId === workflow.id} onClick={() => void updateWorkflowMode(workflow)}>
@@ -544,9 +485,9 @@ export default function WorkflowsPage() {
                         <button
                           className={`workflow-webhook-btn ${isExpanded ? "active" : ""}`}
                           onClick={() => setExpandedWebhookId(isExpanded ? null : workflow.id)}
-                          title="View inbound webhook details and signing secret"
+                          title="View inbound email webhook details and sandbox trace"
                         >
-                          <span>⚡</span> {isExpanded ? "Hide Webhook" : "Inbound Webhook"}
+                          <span>🧪</span> {isExpanded ? "Hide Sandbox & Webhook" : "Trace Sandbox & Webhook"}
                         </button>
                         <button
                           className="workflow-edit-btn"
@@ -566,12 +507,12 @@ export default function WorkflowsPage() {
                       </div>
                     </div>
 
-                    {/* Extension 4: Inbound Webhook Drawer */}
+                    {/* Inbound Webhook Drawer & Feature 2 Sandbox */}
                     {isExpanded && (
                       <div className="workflow-webhook-panel">
                         <div className="webhook-panel-header">
                           <h3>
-                            <span>⚡</span> Inbound Webhook Integration
+                            <span>⚡</span> Inbound Email Ingestion Webhook
                             <span className={`webhook-status-badge ${isEnabled ? "active" : "inactive"}`}>
                               {isEnabled ? "Live & Listening" : "Paused"}
                             </span>
@@ -581,7 +522,7 @@ export default function WorkflowsPage() {
                               className="webhook-toggle-btn"
                               onClick={() => void toggleWebhookActive(workflow)}
                             >
-                              {isEnabled ? "Pause Inbound Events" : "Resume Webhook"}
+                              {isEnabled ? "Pause Inbound Emails" : "Resume Webhook"}
                             </button>
                             <button
                               className="webhook-toggle-btn"
@@ -596,7 +537,7 @@ export default function WorkflowsPage() {
                         {/* Webhook URL & Secret Fields */}
                         <div className="webhook-fields-grid">
                           <div className="webhook-field-card">
-                            <label>Inbound Webhook URL (Public Endpoint)</label>
+                            <label>Inbound Webhook URL (SendGrid / Postmark / Resend endpoint)</label>
                             <div className="webhook-field-row">
                               <input
                                 className="webhook-field-input"
@@ -614,7 +555,7 @@ export default function WorkflowsPage() {
                           </div>
 
                           <div className="webhook-field-card">
-                            <label>Signing Secret Key (HMAC / Header)</label>
+                            <label>HMAC Signing Secret Key</label>
                             <div className="webhook-field-row">
                               <input
                                 className="webhook-field-input"
@@ -646,43 +587,173 @@ export default function WorkflowsPage() {
                           </div>
                         </div>
 
-                        {/* Test Event Section */}
-                        <div style={{ marginTop: "16px", padding: "16px", borderRadius: "10px", background: "#fbf6ee", border: "1px solid #ebdccb" }}>
-                          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "8px" }}>
-                            <label style={{ fontWeight: 650, fontSize: "0.82rem", color: "#594939", textTransform: "uppercase", letterSpacing: "0.04em" }}>Simulate Inbound Test Event</label>
+                        {/* FEATURE 2: Interactive Execution Trace & Webhook Sandbox */}
+                        <div className="trace-sandbox-container">
+                          <div className="trace-sandbox-header">
+                            <div className="trace-sandbox-title">
+                              <h4><span>🧪</span> Interactive Execution Trace & Webhook Sandbox</h4>
+                              <p>Simulate customer email inquiries through the 4-stage pipeline with real-time latency telemetry, vector similarity scores, and zero external side effects.</p>
+                            </div>
                             <button
                               type="button"
-                              className="button-primary"
-                              style={{ padding: "6px 14px", fontSize: "0.8rem", borderRadius: "99px", cursor: "pointer" }}
-                              disabled={testingWorkflowId === workflow.id}
-                              onClick={() => void sendTestEvent(workflow)}
+                              className="trace-run-btn"
+                              disabled={simulatingWorkflowId === workflow.id}
+                              onClick={() => void runSimulation(workflow)}
                             >
-                              {testingWorkflowId === workflow.id ? "Evaluating…" : "▶ Send Test Event"}
+                              {simulatingWorkflowId === workflow.id ? "Tracing Pipeline…" : "▶ Run Interactive Trace"}
                             </button>
                           </div>
-                          <input
-                            type="text"
-                            placeholder={`e.g. Customer message: "Can I get a refund on order #1234?"`}
-                            value={customTestText[workflow.id] || ""}
-                            onChange={(e) => setCustomTestText((prev) => ({ ...prev, [workflow.id]: e.target.value }))}
-                            style={{ width: "100%", padding: "9px 12px", borderRadius: "8px", background: "#fffdf9", border: "1px solid #ded3c3", color: "#30291f", fontSize: "0.85rem" }}
-                          />
-                          {testResult[workflow.id] && (
-                            <div style={{ marginTop: "12px", padding: "12px 14px", borderRadius: "8px", background: "#fff", border: "1px solid #e2d5c3", fontSize: "0.84rem", boxShadow: "0 2px 8px rgba(84,60,30,.04)" }}>
-                              <div style={{ display: "flex", gap: "8px", alignItems: "center", marginBottom: "6px" }}>
-                                <strong style={{ color: "#30291f" }}>Decision:</strong>
-                                <span className={`compact-status-badge ${testResult[workflow.id].decision?.decision === "REJECT" ? "rejected" : "approved"}`} style={{ padding: "2px 8px", borderRadius: "4px", fontSize: "0.75rem", fontWeight: 600 }}>
-                                  {testResult[workflow.id].decision?.decision || "COMPLETED"}
-                                </span>
-                                <span style={{ color: "#746a5c", fontSize: "0.78rem" }}>
-                                  ({Math.round((testResult[workflow.id].decision?.confidence || 1) * 100)}% confidence)
-                                </span>
+
+                          <div className="trace-input-grid">
+                            <div className="trace-field">
+                              <label>Customer Sender Email</label>
+                              <input
+                                type="email"
+                                placeholder="customer@example.com"
+                                value={testEmail[workflow.id] ?? "customer@example.com"}
+                                onChange={(e) => setTestEmail((prev) => ({ ...prev, [workflow.id]: e.target.value }))}
+                              />
+                            </div>
+                            <div className="trace-field">
+                              <label>Email Subject</label>
+                              <input
+                                type="text"
+                                placeholder={`Inquiry regarding ${workflow.name}`}
+                                value={testSubject[workflow.id] ?? `Inquiry regarding ${workflow.name}`}
+                                onChange={(e) => setTestSubject((prev) => ({ ...prev, [workflow.id]: e.target.value }))}
+                              />
+                            </div>
+                          </div>
+
+                          <div className="trace-field">
+                            <label>Inbound Email Body / Request Text</label>
+                            <textarea
+                              rows={3}
+                              placeholder="Type sample customer email text to test policy retrieval and decision logic…"
+                              value={testBody[workflow.id] ?? "Hello, I purchased an item 12 days ago and would like to request a refund. The item is unopened. Could you assist me?"}
+                              onChange={(e) => setTestBody((prev) => ({ ...prev, [workflow.id]: e.target.value }))}
+                            />
+                          </div>
+
+                          {/* 4-Stage Trace Pipeline Visualization */}
+                          {trace && (
+                            <div className="trace-pipeline">
+                              <div className="trace-pipeline-summary">
+                                <div>
+                                  <strong>Execution Trace Result:</strong>{" "}
+                                  <span style={{ textTransform: "capitalize", color: "#fbbf24", fontWeight: 600 }}>{trace.mode} mode</span>
+                                </div>
+                                <div className="trace-summary-metrics">
+                                  <span>Total Pipeline Latency:</span>
+                                  <span className="trace-latency-pill">⚡ {trace.total_latency_ms} ms</span>
+                                </div>
                               </div>
-                              <p style={{ margin: "4px 0", color: "#4c4439", lineHeight: 1.6 }}>{testResult[workflow.id].decision?.reasoning}</p>
-                              {testResult[workflow.id].requires_human_approval && (
-                                <p style={{ margin: "6px 0 0", color: "#b46b24", fontSize: "0.78rem", fontWeight: 500 }}>
-                                  ⓘ Execution paused in Review Queue for human approval.
-                                </p>
+
+                              {/* Stage 1: Intake & Validation */}
+                              {trace.stages[0] && (
+                                <div className="trace-stage-card">
+                                  <div className="trace-stage-header">
+                                    <div className="trace-stage-title">
+                                      <span className="trace-stage-step-num">1</span>
+                                      <span>Email Intake & Validation</span>
+                                    </div>
+                                    <span className="trace-stage-latency">{trace.stages[0].latency_ms} ms</span>
+                                  </div>
+                                  <div style={{ fontSize: "11.5px", color: "var(--text-secondary)", display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: "6px" }}>
+                                    <div><strong>Sender:</strong> {trace.stages[0].sender}</div>
+                                    <div><strong>Subject:</strong> {trace.stages[0].subject}</div>
+                                    <div><strong>Payload:</strong> {trace.stages[0].payload_bytes} bytes</div>
+                                    <div><strong>Status:</strong> <span style={{ color: "#34d399", fontWeight: 600 }}>✓ {trace.stages[0].status}</span></div>
+                                  </div>
+                                </div>
+                              )}
+
+                              {/* Stage 2: Knowledge Retrieval */}
+                              {trace.stages[1] && (
+                                <div className="trace-stage-card">
+                                  <div className="trace-stage-header">
+                                    <div className="trace-stage-title">
+                                      <span className="trace-stage-step-num">2</span>
+                                      <span>Policy Knowledge Retrieval (Hybrid Vector + Keyword)</span>
+                                    </div>
+                                    <span className="trace-stage-latency">{trace.stages[1].latency_ms} ms</span>
+                                  </div>
+                                  <div style={{ fontSize: "12px", color: "var(--text-secondary)", marginBottom: "6px" }}>
+                                    {trace.stages[1].retrieved_count ? `${trace.stages[1].retrieved_count} relevant policy passage(s) matched customer intent:` : "No direct policy passages matched. Evaluated with base workflow instructions."}
+                                  </div>
+                                  {trace.stages[1].chunks && trace.stages[1].chunks.length > 0 && (
+                                    <div className="trace-chunk-list">
+                                      {trace.stages[1].chunks.map((chunk) => (
+                                        <div key={chunk.id} className="trace-chunk-item">
+                                          <div className="trace-chunk-meta">
+                                            <strong>📄 {chunk.filename} (section #{chunk.id})</strong>
+                                            <span className="trace-score-pill">Relevance: {chunk.similarity_score}</span>
+                                          </div>
+                                          <p style={{ margin: 0, color: "var(--text-secondary)", lineHeight: 1.5 }}>{chunk.excerpt}</p>
+                                        </div>
+                                      ))}
+                                    </div>
+                                  )}
+                                </div>
+                              )}
+
+                              {/* Stage 3: AI Reasoning & Evaluation */}
+                              {trace.stages[2] && (
+                                <div className="trace-stage-card">
+                                  <div className="trace-stage-header">
+                                    <div className="trace-stage-title">
+                                      <span className="trace-stage-step-num">3</span>
+                                      <span>AI Evaluation & Confidence Scoring</span>
+                                    </div>
+                                    <span className="trace-stage-latency">{trace.stages[2].latency_ms} ms</span>
+                                  </div>
+                                  <div style={{ display: "flex", gap: "8px", alignItems: "center", marginBottom: "8px", flexWrap: "wrap" }}>
+                                    <span className={`compact-status-badge ${trace.stages[2].decision === "REJECT" ? "rejected" : "approved"}`} style={{ padding: "3px 9px", borderRadius: "4px", fontSize: "11px", fontWeight: 700 }}>
+                                      DECISION: {trace.stages[2].decision || "REPLY"}
+                                    </span>
+                                    <span style={{ fontSize: "11px", color: "var(--text-secondary)", fontWeight: 600 }}>
+                                      Confidence: {Math.round((trace.stages[2].confidence || 1) * 100)}%
+                                    </span>
+                                    <span style={{ fontSize: "11px", color: "var(--text-muted)" }}>
+                                      Provider: <strong style={{ color: "var(--text-primary)" }}>{trace.stages[2].provider?.toUpperCase() || "GEMINI"}</strong>
+                                    </span>
+                                    <span style={{ fontSize: "10px", color: "var(--text-muted)", marginLeft: "auto" }}>
+                                      ~{trace.stages[2].prompt_tokens_est || 0} in / ~{trace.stages[2].completion_tokens_est || 0} out tokens
+                                    </span>
+                                  </div>
+                                  <div style={{ background: "rgba(99, 102, 241, 0.08)", padding: "12px 14px", borderRadius: "8px", border: "1px solid rgba(99, 102, 241, 0.2)", fontSize: "12px", color: "var(--text-primary)", lineHeight: 1.6 }}>
+                                    <strong style={{ color: "#a5b4fc" }}>AI Reasoning:</strong> {trace.stages[2].reasoning}
+                                  </div>
+                                </div>
+                              )}
+
+                              {/* Stage 4: Outbound Email Dispatch Preview */}
+                              {trace.stages[3] && trace.stages[3].payload && (
+                                <div className="trace-stage-card">
+                                  <div className="trace-stage-header">
+                                    <div className="trace-stage-title">
+                                      <span className="trace-stage-step-num">4</span>
+                                      <span>Outbound Email Dispatch Preview (Safe Dry-Run)</span>
+                                    </div>
+                                    <span className="trace-stage-latency">{trace.stages[3].latency_ms} ms</span>
+                                  </div>
+                                  <div className="trace-email-box">
+                                    <div className="trace-email-meta">
+                                      <div><strong>To:</strong> {trace.stages[3].payload.to}</div>
+                                      <div><strong>Subject:</strong> {trace.stages[3].payload.subject}</div>
+                                      <div><strong>Destination URL:</strong> {trace.stages[3].payload.dispatch_url}</div>
+                                      <div style={{ fontSize: "11px", color: "var(--text-muted)" }}>
+                                        <strong>Headers:</strong> {Object.entries(trace.stages[3].payload.headers).map(([k, v]) => `${k}=${v}`).join(" | ")}
+                                      </div>
+                                    </div>
+                                    <div className="trace-email-body">
+                                      {trace.stages[3].payload.body}
+                                    </div>
+                                  </div>
+                                  <div style={{ marginTop: "10px", fontSize: "11px", color: "#fbbf24", display: "flex", alignItems: "center", gap: "6px" }}>
+                                    <span>ⓘ</span> Verified dry-run simulation: External outbound dispatch was bypassed. Zero external network side effects.
+                                  </div>
+                                </div>
                               )}
                             </div>
                           )}
@@ -696,11 +767,121 @@ export default function WorkflowsPage() {
             </div>
           )}
         </section>
-      </main>
-      <footer className="product-footer">
-        <span>Loopdesk · Customer operations workflows & webhooks</span>
-        <a href="/help#guide-03">Workflow guide ↗</a>
-      </footer>
-    </div>
+
+        {/* ── Workflow Creator & Example Templates (Placed below active workflows) ── */}
+        <section className="workflow-workspace-grid" id="workflow-builder" style={{ marginTop: "32px" }}>
+          <aside className="workflow-examples card">
+            <div className="workflow-panel-heading">
+              <p className="eyebrow">START WITH AN EXAMPLE</p>
+              <h2>Common workflows</h2>
+              <p>Choose an email-first starting point. You can tailor every detail before saving.</p>
+            </div>
+            <div className="workflow-example-list">
+              {examples.map((example) => (
+                <button
+                  key={example.name}
+                  className={`workflow-example ${activeExample === example.name ? "selected" : ""}`}
+                  onClick={() => selectExample(example)}
+                >
+                  <span className="workflow-example-icon">{example.icon}</span>
+                  <span>
+                    <strong>{example.name}</strong>
+                    <small>{example.description}</small>
+                  </span>
+                  <span className="workflow-example-arrow">↗</span>
+                </button>
+              ))}
+            </div>
+          </aside>
+
+          <section className="workflow-builder card">
+            <div className="workflow-panel-heading">
+              <p className="eyebrow">{editingWorkflowId ? "EDITING WORKFLOW" : "WORKFLOW CREATOR"}</p>
+              <h2>{editingWorkflowId ? `Edit “${name}”` : "Build an email workflow"}</h2>
+              <p>{editingWorkflowId ? "Update instructions, mode, or dispatch destinations without losing execution history." : "Give it clear instructions and configure your outbound email dispatch."}</p>
+            </div>
+            <form className="workflow-form" onSubmit={(event) => void saveWorkflow(event)}>
+              <label>
+                Workflow name
+                <input
+                  required
+                  minLength={2}
+                  maxLength={100}
+                  value={name}
+                  onChange={(event) => setName(event.target.value)}
+                  placeholder="e.g. Refund request review"
+                />
+              </label>
+              <label>
+                Short description
+                <input
+                  maxLength={255}
+                  value={description}
+                  onChange={(event) => setDescription(event.target.value)}
+                  placeholder="What customer queries should this email workflow handle?"
+                />
+              </label>
+              <label>
+                Decision instructions
+                <textarea
+                  required
+                  rows={5}
+                  maxLength={10000}
+                  value={prompt}
+                  onChange={(event) => setPrompt(event.target.value)}
+                  placeholder="Describe how to evaluate an incoming customer email against your policy documents…"
+                />
+              </label>
+              <div className="workflow-form-row">
+                <label>
+                  Next action
+                  <select value={action} onChange={(event) => setAction(event.target.value as typeof action)}>
+                    <option value="email">Email Auto-Reply (via your outbound email service or webhook)</option>
+                  </select>
+                </label>
+                <label>
+                  Outbound Email Dispatch URL <span>(optional; webhook or API endpoint called to send email)</span>
+                  <input
+                    type="url"
+                    value={url}
+                    onChange={(event) => setUrl(event.target.value)}
+                    placeholder="https://api.yourdomain.com/send-email or email webhook relay"
+                  />
+                </label>
+              </div>
+              <fieldset className="workflow-mode-selector">
+                <legend>Execution mode <small>Applies to every customer email received by this workflow.</small></legend>
+                <div>
+                  <button type="button" className={approval ? "selected" : ""} aria-pressed={approval} onClick={() => setApproval(true)}>
+                    <strong>Manual review</strong><small>Pause every result in the review queue. A human approves or edits the drafted email response.</small>
+                  </button>
+                  <button type="button" className={!approval ? "selected" : ""} aria-pressed={!approval} onClick={() => setApproval(false)}>
+                    <strong>Automatic</strong><small>Auto-evaluate and dispatch email replies when confident, with no human bottleneck.</small>
+                  </button>
+                </div>
+              </fieldset>
+              <div style={{ display: "flex", gap: "10px", alignItems: "center" }}>
+                <button
+                  className="button-primary workflow-save"
+                  type="submit"
+                  disabled={busy || !name.trim() || !prompt.trim()}
+                >
+                  {busy ? "Saving…" : editingWorkflowId ? "Save changes" : "Create workflow"}
+                  <span>↗</span>
+                </button>
+                {editingWorkflowId && (
+                  <button
+                    type="button"
+                    className="workflow-cancel-btn"
+                    onClick={cancelEditing}
+                  >
+                    Cancel edit
+                  </button>
+                )}
+              </div>
+            </form>
+          </section>
+        </section>
+    </DashboardLayout>
   );
 }

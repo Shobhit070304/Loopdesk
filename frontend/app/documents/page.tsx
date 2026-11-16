@@ -1,7 +1,7 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
-import { Nav } from "../components";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { DashboardLayout } from "../components";
 
 type UploadResult = { filename: string; message: string; chunks_count: number };
 type KnowledgeDocument = { id: string; filename: string; content_type: string; size_bytes: number | null; chunk_count: number; created_at: string | null };
@@ -28,6 +28,15 @@ export default function DocumentsPage() {
 
   const nonLegacyDocs = documents.filter((item) => item.id !== "legacy");
   const isLimitReached = nonLegacyDocs.length >= 5;
+
+  const totalChunks = useMemo(
+    () => documents.reduce((acc, doc) => acc + (doc.chunk_count || 0), 0),
+    [documents]
+  );
+  const totalBytes = useMemo(
+    () => documents.reduce((acc, doc) => acc + (doc.size_bytes || 0), 0),
+    [documents]
+  );
 
   const filteredDocuments = documents.filter((doc) =>
     doc.filename.toLowerCase().includes(searchTerm.toLowerCase().trim())
@@ -95,9 +104,37 @@ export default function DocumentsPage() {
     }
   }
 
-  return <div className="product-shell"><Nav active="documents" /><main className="page-container">
-    <div className="page-heading"><p className="eyebrow">YOUR TEAM’S KNOWLEDGE</p><h1>Documents</h1><p>Upload a policy, playbook, or guide to make it available to your AI assistant and workflows.</p></div>
-    <section className="card document-upload-card">
+  return (
+    <DashboardLayout
+      active="documents"
+      title="Knowledge Base & Documents"
+      subtitle="Upload customer policies, playbooks, and guidelines to vectorize into PostgreSQL pgvector (768-dim)."
+    >
+      {/* ── Knowledge Base Telemetry Metrics ── */}
+      <section className="queue-stats-grid" style={{ marginBottom: "24px" }} aria-label="Knowledge Base statistics">
+        <div className="queue-stat-card">
+          <span className="queue-stat-label">Indexed Documents</span>
+          <span className="queue-stat-value">{nonLegacyDocs.length} <small style={{ fontSize: "14px", color: "var(--text-muted)" }}>/ 5</small></span>
+          <span className="queue-stat-sub">{isLimitReached ? "Portfolio capacity reached" : `${5 - nonLegacyDocs.length} upload slots remaining`}</span>
+        </div>
+        <div className="queue-stat-card">
+          <span className="queue-stat-label">Vector Passages</span>
+          <span className="queue-stat-value" style={{ color: "#38bdf8" }}>{totalChunks}</span>
+          <span className="queue-stat-badge cyan">Searchable Embeddings</span>
+        </div>
+        <div className="queue-stat-card">
+          <span className="queue-stat-label">Indexed Storage</span>
+          <span className="queue-stat-value" style={{ color: "#34d399" }}>{(totalBytes / 1024).toFixed(1)} KB</span>
+          <span className="queue-stat-badge emerald">Parsed & Sanitized</span>
+        </div>
+        <div className="queue-stat-card">
+          <span className="queue-stat-label">Vector Model</span>
+          <span className="queue-stat-value" style={{ fontSize: "18px", color: "#a5b4fc", fontFamily: "var(--font-mono)" }}>768-dim</span>
+          <span className="queue-stat-sub">text-embedding-004 in pgvector</span>
+        </div>
+      </section>
+
+      <section className="card document-upload-card" style={{ padding: "28px", marginBottom: "28px" }}>
       <label className="document-dropzone" style={{ opacity: isLimitReached ? 0.7 : 1 }}>
         <input ref={fileInputRef} type="file" accept=".pdf,.txt,.md,.csv,.json" disabled={isLimitReached} onChange={(event) => { setFile(event.target.files?.[0] || null); setError(""); setResult(null); }} />
         <span className="document-upload-icon" aria-hidden="true">↑</span>
@@ -126,18 +163,18 @@ export default function DocumentsPage() {
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
               style={{
-                padding: "6px 12px",
-                borderRadius: "6px",
-                background: "#fbf6ee",
-                border: "1px solid #ebdccb",
-                color: "#2d2822",
-                fontSize: "0.82rem",
-                width: "180px",
+                padding: "7px 14px",
+                borderRadius: "8px",
+                background: "var(--bg-input)",
+                border: "1px solid var(--border-card)",
+                color: "var(--text-primary)",
+                fontSize: "12.5px",
+                width: "200px",
               }}
             />
           )}
-          <span style={{ fontSize: "0.82rem", color: "#6e6252", fontWeight: 500 }}>
-            {nonLegacyDocs.length} / 5 files {isLimitReached && <span style={{ color: "#b94a48", marginLeft: "4px" }}>(Cap reached)</span>}
+          <span style={{ fontSize: "12px", color: "var(--text-muted)", fontWeight: 500 }}>
+            {nonLegacyDocs.length} / 5 files {isLimitReached && <span style={{ color: "var(--accent-rose)", marginLeft: "4px" }}>(Cap reached)</span>}
           </span>
         </div>
       </div>
@@ -164,5 +201,6 @@ export default function DocumentsPage() {
         </div>
       )}
     </section>
-  </main><footer className="product-footer"><span>Loopdesk · Your team’s knowledge</span></footer></div>;
+    </DashboardLayout>
+  );
 }

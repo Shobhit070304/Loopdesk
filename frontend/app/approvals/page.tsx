@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Nav } from "../components";
+import { DashboardLayout } from "../components";
 
 const API = "/api/backend";
 
@@ -173,82 +173,89 @@ export default function ApprovalsPage() {
   const shown = filter === "all" ? items : items.filter((item) => category(item.status, item.decision_output?.decision) === filter);
 
   return (
-    <div className="product-shell">
-      <Nav active="approvals" />
-      <main className="page-container approvals-page">
-        <header className="page-heading approvals-heading">
-          <p className="eyebrow">HUMAN-IN-THE-LOOP TRUST ENGINE</p>
-          <h1>Customer Review Queue</h1>
-          <p>Compact inbox of customer requests. Click any row to inspect AI analysis and approve in the side panel.</p>
-        </header>
+    <DashboardLayout
+      active="approvals"
+      title="Customer Review Queue"
+      subtitle="Human-in-the-loop triage inbox. Inspect AI reasoning and approve or edit email replies."
+      actions={
+        <button
+          className="btn-secondary"
+          style={{ padding: "7px 13px", fontSize: "12px" }}
+          onClick={() => {
+            setLoading(true);
+            void refresh();
+          }}
+        >
+          ↻ Refresh Feed
+        </button>
+      }
+    >
 
-        <section className="approval-stats" aria-label="Workflow run statistics">
-          <div>
-            <small>Active Workflows</small>
-            <strong>{counts.workflows}</strong>
+        {/* ── Review Queue KPI Stat Cards ────────────────────────────── */}
+        <section className="queue-stats-grid" aria-label="Workflow run statistics">
+          <div className="queue-stat-card">
+            <span className="queue-stat-label">Total Volume</span>
+            <span className="queue-stat-value">{counts.runs}</span>
+            <span className="queue-stat-sub">Across {counts.workflows} active workflows</span>
           </div>
-          <div>
-            <small>Total Requests</small>
-            <strong>{counts.runs}</strong>
+          <div className="queue-stat-card highlight-amber">
+            <span className="queue-stat-label">Pending Review</span>
+            <span className="queue-stat-value" style={{ color: counts.pending > 0 ? "#fbbf24" : "#ffffff" }}>
+              {counts.pending}
+            </span>
+            <span className="queue-stat-badge amber">Awaiting Human Triage</span>
           </div>
-          <div>
-            <small>Accepted</small>
-            <strong>{counts.approved}</strong>
+          <div className="queue-stat-card">
+            <span className="queue-stat-label">Auto-Executed</span>
+            <span className="queue-stat-value" style={{ color: "#34d399" }}>{counts.automatic}</span>
+            <span className="queue-stat-badge emerald">Confidence Met</span>
           </div>
-          <div>
-            <small>Automatic runs</small>
-            <strong>{counts.automatic}</strong>
+          <div className="queue-stat-card">
+            <span className="queue-stat-label">Accepted</span>
+            <span className="queue-stat-value" style={{ color: "#38bdf8" }}>{counts.approved}</span>
+            <span className="queue-stat-badge cyan">Operator Approved</span>
           </div>
-          <div>
-            <small>Rejected</small>
-            <strong>{counts.rejected}</strong>
+          <div className="queue-stat-card">
+            <span className="queue-stat-label">Rejected</span>
+            <span className="queue-stat-value" style={{ color: counts.rejected > 0 ? "#fb7185" : "var(--text-muted)" }}>
+              {counts.rejected}
+            </span>
+            <span className="queue-stat-sub">Denied by Policy</span>
           </div>
-          <div>
-            <small>Needs Review</small>
-            <strong>{counts.pending}</strong>
-          </div>
-          <div>
-            <small>Action failed</small>
-            <strong>{counts.failed}</strong>
+          <div className="queue-stat-card">
+            <span className="queue-stat-label">Failed Actions</span>
+            <span className="queue-stat-value" style={{ color: counts.failed > 0 ? "#f43f5e" : "var(--text-muted)" }}>
+              {counts.failed}
+            </span>
+            <span className="queue-stat-sub">Dispatch Errors</span>
           </div>
         </section>
 
-        <section className="approval-list-heading">
-          <div>
-            <p className="eyebrow">TRIAGE INBOX</p>
-            <h2>Incoming Customer Decisions</h2>
-            <p>Click any item to open the slide-out review panel.</p>
+        {/* ── Inbox Toolbar & Filter Pills ────────────────────────────── */}
+        <div className="queue-toolbar-card">
+          <div className="queue-toolbar-left">
+            <div className="queue-filters" role="tablist" aria-label="Filter workflow runs">
+              {filters.map((option) => {
+                const count = option.id === "all" ? counts.runs : counts[option.id];
+                return (
+                  <button
+                    key={option.id}
+                    role="tab"
+                    aria-selected={filter === option.id}
+                    onClick={() => setFilter(option.id)}
+                    className={`queue-filter-btn ${filter === option.id ? "selected" : ""}`}
+                  >
+                    <span>{option.label}</span>
+                    <span className="queue-filter-count">{count}</span>
+                  </button>
+                );
+              })}
+            </div>
           </div>
-          <button
-            className="refresh-button"
-            onClick={() => {
-              setLoading(true);
-              void refresh();
-            }}
-          >
-            ↻ Refresh feed
-          </button>
-        </section>
-
-        <section className="approval-toolbar">
-          <div className="approval-filters" role="tablist" aria-label="Filter workflow runs">
-            {filters.map((option) => {
-              const count = option.id === "all" ? counts.runs : counts[option.id];
-              return (
-                <button
-                  key={option.id}
-                  role="tab"
-                  aria-selected={filter === option.id}
-                  onClick={() => setFilter(option.id)}
-                  className={`approval-filter ${filter === option.id ? "selected" : ""}`}
-                >
-                  {option.label}
-                  <span>{count}</span>
-                </button>
-              );
-            })}
-          </div>
-        </section>
+          <span style={{ fontSize: "11.5px", color: "var(--text-muted)" }}>
+            Click any row to open decision review
+          </span>
+        </div>
 
         {error && (
           <div className="inline-error" role="alert">
@@ -261,8 +268,8 @@ export default function ApprovalsPage() {
             <span className="spinner" /> Loading customer review queue…
           </div>
         ) : shown.length === 0 ? (
-          <div className="approval-empty card">
-            <span>✓</span>
+          <div className="approval-empty">
+            <div className="approval-empty-icon">✓</div>
             <h2>{filter === "pending" ? "Queue is clear — no pending reviews." : "No requests found."}</h2>
             <p>
               {filter === "all"
@@ -444,13 +451,13 @@ export default function ApprovalsPage() {
                             type="button"
                             onClick={() => setIsEditingDraft((prev) => !prev)}
                             style={{
-                              background: "#fdf8f0",
-                              border: "1px solid #d9ccbe",
-                              color: "#6e5843",
-                              padding: "2px 8px",
-                              borderRadius: "4px",
-                              fontSize: "0.72rem",
-                              fontWeight: 500,
+                              background: "rgba(99, 102, 241, 0.12)",
+                              border: "1px solid rgba(99, 102, 241, 0.3)",
+                              color: "#a5b4fc",
+                              padding: "4px 10px",
+                              borderRadius: "6px",
+                              fontSize: "11.5px",
+                              fontWeight: 600,
                               cursor: "pointer",
                             }}
                           >
@@ -468,15 +475,15 @@ export default function ApprovalsPage() {
                           onChange={(e) => setEditedDraftText(e.target.value)}
                           style={{
                             width: "100%",
-                            padding: "8px 10px",
-                            borderRadius: "6px",
-                            background: "#fffdf9",
-                            border: "1px solid #ded3c3",
-                            color: "#28251f",
-                            fontSize: "0.88rem",
+                            padding: "10px 12px",
+                            borderRadius: "8px",
+                            background: "var(--bg-input)",
+                            border: "1px solid var(--border-card)",
+                            color: "var(--text-primary)",
+                            fontSize: "13px",
                             marginBottom: "8px",
                             fontFamily: "inherit",
-                            lineHeight: 1.5,
+                            lineHeight: 1.55,
                           }}
                         />
                       ) : (
@@ -521,11 +528,11 @@ export default function ApprovalsPage() {
 
                 {/* Failure Diagnostic Alert */}
                 {selectedItem.decision_output?.error ? (
-                  <div className="ticket-card" style={{ borderLeft: "3px solid #d93025", background: "#fdf3f2", borderRadius: "8px", padding: "12px 14px", margin: "14px 0" }}>
-                    <div style={{ display: "flex", alignItems: "center", gap: "8px", color: "#c5221f", fontWeight: 650, fontSize: "13px" }}>
+                  <div className="ticket-card" style={{ borderLeft: "3px solid #f43f5e", background: "rgba(244, 63, 94, 0.1)", borderRadius: "8px", padding: "14px 16px", margin: "14px 0", border: "1px solid rgba(244, 63, 94, 0.25)" }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: "8px", color: "#fb7185", fontWeight: 650, fontSize: "13px" }}>
                       <span>⚠️</span> Failure Diagnostic
                     </div>
-                    <p style={{ margin: "6px 0 0", fontSize: "12px", color: "#3c4043", lineHeight: 1.5, wordBreak: "break-word" }}>
+                    <p style={{ margin: "6px 0 0", fontSize: "12.5px", color: "var(--text-secondary)", lineHeight: 1.5, wordBreak: "break-word" }}>
                       {selectedItem.decision_output.error}
                     </p>
                   </div>
@@ -569,7 +576,7 @@ export default function ApprovalsPage() {
                   {selectedItem.reviewed_by && (
                     <div className="info-strip-cell full-width">
                       <span className="info-strip-label">Reviewed By</span>
-                      <span className="info-strip-value" style={{ color: "#2e6a28" }}>
+                      <span className="info-strip-value" style={{ color: "#34d399" }}>
                         {selectedItem.reviewed_by}
                       </span>
                     </div>
@@ -616,13 +623,12 @@ export default function ApprovalsPage() {
                     </strong>
                     {selectedItem.reviewed_by ? ` by ${selectedItem.reviewed_by}` : ""}
                   </span>
-                  <span style={{ color: "#8a7b69", fontSize: 11 }}>Read-only</span>
+                  <span style={{ color: "var(--text-muted)", fontSize: 11 }}>Read-only</span>
                 </div>
               )}
             </>
           )}
         </aside>
-      </main>
-    </div>
+    </DashboardLayout>
   );
 }

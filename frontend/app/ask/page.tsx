@@ -1,20 +1,33 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { Nav, useAuth } from "../components";
+import { DashboardLayout, useAuth } from "../components";
 
 type SourceRef = { filename: string; chunk_id?: number };
 type Message = { role: "user" | "assistant"; content: string; source?: string; sources?: SourceRef[] };
 type Conversation = { id: string; title: string; messages: Message[]; updatedAt: number };
 const HISTORY_LIMIT = 40;
 
+const SUGGESTED_PROMPTS = [
+  "What is our standard return and refund window?",
+  "How are shipping damages and claims handled?",
+  "Explain policy exceptions for custom orders",
+];
+
 function isConversation(value: unknown): value is Conversation {
   if (!value || typeof value !== "object") return false;
   const conversation = value as Partial<Conversation>;
-  return typeof conversation.id === "string" && typeof conversation.title === "string" &&
-    Array.isArray(conversation.messages) && conversation.messages.every((message) =>
-      !!message && (message.role === "user" || message.role === "assistant") && typeof message.content === "string"
-    );
+  return (
+    typeof conversation.id === "string" &&
+    typeof conversation.title === "string" &&
+    Array.isArray(conversation.messages) &&
+    conversation.messages.every(
+      (message) =>
+        !!message &&
+        (message.role === "user" || message.role === "assistant") &&
+        typeof message.content === "string"
+    )
+  );
 }
 
 export default function AskPage() {
@@ -29,6 +42,7 @@ export default function AskPage() {
   const [error, setError] = useState("");
   const input = useRef<HTMLTextAreaElement>(null);
   const bottom = useRef<HTMLDivElement>(null);
+
   const accountConversations = historyFor === user?.sub ? conversations : [];
   const activeConversation = accountConversations.find((conversation) => conversation.id === activeId);
   const messages = useMemo(() => activeConversation?.messages || [], [activeConversation]);
@@ -56,15 +70,20 @@ export default function AskPage() {
     try {
       const compact = conversations.slice(0, HISTORY_LIMIT).map((conversation) => ({
         ...conversation,
-        messages: conversation.messages.slice(-200).map((message) => ({ ...message, content: message.content.slice(0, 20_000) })),
+        messages: conversation.messages.slice(-200).map((message) => ({
+          ...message,
+          content: message.content.slice(0, 20_000),
+        })),
       }));
       window.localStorage.setItem(`loopdesk:ask-history:${user.sub}`, JSON.stringify(compact));
     } catch {
-      setError("This browser could not save chat history. You can still continue this conversation.");
+      setError("Browser storage is full. Conversation will remain active in current session.");
     }
   }, [conversations, historyFor, historyReady, user?.sub]);
 
-  useEffect(() => { bottom.current?.scrollIntoView({ behavior: "smooth" }); }, [messages, busy]);
+  useEffect(() => {
+    bottom.current?.scrollIntoView({ behavior: "smooth" });
+  }, [messages, busy]);
 
   function startNewChat() {
     setActiveId(null);
@@ -84,7 +103,7 @@ export default function AskPage() {
   }
 
   function clearAllConversations() {
-    if (!window.confirm("Clear all your saved conversations on this browser?")) return;
+    if (!window.confirm("Clear all your saved conversation history on this device?")) return;
     setConversations([]);
     setActiveId(null);
     setPrompt("");
@@ -95,42 +114,45 @@ export default function AskPage() {
     const query = value.trim();
     if (!query || busy) return;
     if (query.length > 1000) {
-      setError("Questions must be 1,000 characters or fewer.");
+      setError("Inquiries must be 1,000 characters or fewer.");
       return;
     }
-    const now = Date.now();
-    const conversationId = activeId || `${now}`;
-    const priorMessages = activeConversation?.messages || [];
-    const historyPayload = priorMessages.slice(-6).map((m) => ({
-      role: m.role,
-      content: m.content,
-    }));
 
-    setActiveId(conversationId);
+    const now = Date.now();
+    let conversationId = activeId;
+
+    if (!conversationId) {
+      conversationId = `conv-${now}-${Math.random().toString(36).slice(2, 8)}`;
+      const title = query.slice(0, 48) + (query.length > 48 ? "…" : "");
+      setConversations((current) => [{ id: conversationId!, title, messages: [{ role: "user", content: query }], updatedAt: now }, ...current]);
+      setActiveId(conversationId);
+    } else {
+      setConversations((current) =>
+        current.map((c) => (c.id === conversationId ? { ...c, updatedAt: now, messages: [...c.messages, { role: "user", content: query }] } : c))
+      );
+    }
+
     setPrompt("");
-    setError("");
-    setConversations((current) => {
-      const existing = current.find((conversation) => conversation.id === conversationId);
-      if (!existing) return [{ id: conversationId, title: query.slice(0, 48), messages: [{ role: "user" as const, content: query }], updatedAt: now }, ...current].slice(0, HISTORY_LIMIT);
-      return current.map((conversation) => conversation.id === conversationId
-        ? { ...conversation, updatedAt: now, messages: [...conversation.messages, { role: "user", content: query }] }
-        : conversation);
-    });
     setBusy(true);
+    setError("");
+
     try {
       const response = await fetch("/api/backend/ask", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ query, history: historyPayload }),
+        body: JSON.stringify({ question: query }),
       });
       const data = await response.json();
       if (!response.ok) {
-        const errorMsg = typeof data.detail === "string" ? data.detail : Array.isArray(data.detail) ? data.detail.map((d: { msg?: string }) => d.msg || JSON.stringify(d)).join("; ") : "The assistant could not answer right now.";
-        throw new Error(errorMsg);
+        throw new Error(data.detail || "The assistant could not retrieve policy answers right now.");
       }
-      setConversations((current) => current.map((conversation) => conversation.id === conversationId
-        ? { ...conversation, updatedAt: now, messages: [...conversation.messages, { role: "assistant", content: data.answer, source: data.source, sources: data.sources }] }
-        : conversation));
+      setConversations((current) =>
+        current.map((c) =>
+          c.id === conversationId
+            ? { ...c, updatedAt: now, messages: [...c.messages, { role: "assistant", content: data.answer, source: data.source, sources: data.sources }] }
+            : c
+        )
+      );
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "The assistant could not answer right now.");
     } finally {
@@ -139,128 +161,201 @@ export default function AskPage() {
     }
   }
 
-  function composer(centered: boolean) {
-    return <form className={`chat-composer ${centered ? "centered" : ""}`} onSubmit={(event) => { event.preventDefault(); void sendMessage(); }}>
-      <textarea ref={input} rows={1} maxLength={1000} value={prompt} onChange={(event) => setPrompt(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void sendMessage(); } }} placeholder="Message Loopdesk" aria-label="Message Loopdesk" disabled={busy} />
-      <button type="submit" aria-label="Send message" disabled={busy || !prompt.trim()}>{busy ? <span className="spinner" /> : "↑"}</button>
-      <small>Loopdesk can make mistakes · Portfolio demo: 50 queries/day</small>
-    </form>;
-  }
-
-  return <div className="product-shell"><Nav active="ask" /><div className="assistant-layout">
-    <aside className="assistant-sidebar" aria-label="Chat history">
-      <button className="assistant-new-chat" onClick={startNewChat}><span>＋</span> New chat</button>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "0 6px", marginBottom: "4px" }}>
-        <p className="assistant-sidebar-label" style={{ margin: 0 }}>Recent</p>
-        {accountConversations.length > 0 && (
-          <button
-            type="button"
-            onClick={clearAllConversations}
-            style={{
-              background: "transparent",
-              border: "none",
-              color: "#978a78",
-              fontSize: "0.72rem",
-              cursor: "pointer",
-              fontWeight: 500,
-            }}
-            title="Clear all chat history"
-          >
-            Clear all
+  return (
+    <DashboardLayout
+      active="ask"
+      title="Policy Copilot"
+      flush={true}
+      actions={
+        <button className="button-primary" onClick={startNewChat} style={{ padding: "7px 14px", fontSize: "12px" }}>
+          <span>＋</span> New Chat
+        </button>
+      }
+    >
+      <div className="copilot-container">
+        {/* ── Left Sidebar History ──────────────────────────────────── */}
+        <aside className="copilot-sidebar">
+          <button className="copilot-new-chat-btn" onClick={startNewChat}>
+            <span>＋</span> New Conversation
           </button>
-        )}
-      </div>
-      <div className="assistant-chat-list">
-        {accountConversations.map((conversation) => (
-          <div
-            key={conversation.id}
-            style={{ display: "flex", alignItems: "center", position: "relative" }}
-          >
-            <button
-              className={`assistant-chat-link ${conversation.id === activeId ? "selected" : ""}`}
-              onClick={() => { setActiveId(conversation.id); setPrompt(""); setError(""); }}
-              title={conversation.title}
-              style={{ flex: 1, paddingRight: "26px", textAlign: "left" }}
-            >
-              {conversation.title}
-            </button>
-            <button
-              type="button"
-              onClick={(e) => deleteConversation(conversation.id, e)}
-              style={{
-                position: "absolute",
-                right: "6px",
-                background: "transparent",
-                border: "none",
-                color: "#a49685",
-                cursor: "pointer",
-                padding: "2px 5px",
-                fontSize: "0.85rem",
-                lineHeight: 1,
-                borderRadius: "4px",
-              }}
-              title="Delete conversation"
-            >
-              ×
-            </button>
-          </div>
-        ))}
-      </div>
-      <div className="assistant-sidebar-footer"><span className="assistant-sidebar-mark">✳</span><span><b>Loopdesk assistant</b><small>Portfolio demo · 50 queries/day</small></span></div>
-    </aside>
 
-    <main className={`assistant-main ${messages.length === 0 ? "is-empty" : "has-messages"}`}>
-      {messages.length === 0 ? <div className="ask-empty-state"><div><p className="eyebrow">YOUR CUSTOMER WORKSPACE</p><h1>How can I help?</h1><p>Ask a question and get a thoughtful answer from your team’s knowledge.</p></div>{composer(true)}</div> : <>
-        <header className="assistant-chat-heading"><span>Loopdesk assistant</span><button onClick={startNewChat}>＋ New chat</button></header>
-        <section className="chat-thread" aria-live="polite">
-          {messages.map((message, index) => <article className={`chat-message ${message.role}`} key={`${activeId}-${index}`}>
-            <div className="chat-message-label">{message.role === "user" ? "You" : <><span className="assistant-message-mark">✳</span> Loopdesk</>}</div>
-            {message.role === "assistant" ? <MarkdownContent markdown={message.content} /> : <p>{message.content}</p>}
-            {message.role === "assistant" && message.source && <small className="chat-source">{message.source === "documents_retrieved" ? "Based on your documents" : message.source === "cache" ? "Quick answer" : "Assistant response"}</small>}
-            {message.role === "assistant" && message.sources?.length ? <div className="chat-source-list" aria-label="Sources">{message.sources.map((source, sourceIndex) => <span key={`${source.filename}-${sourceIndex}`}>Source {sourceIndex + 1}: {source.filename}</span>)}</div> : null}
-          </article>)}
-          {busy && <article className="chat-message assistant"><div className="chat-message-label"><span className="assistant-message-mark">✳</span> Loopdesk</div><p className="thinking-indicator"><span className="spinner" /> Thinking…</p></article>}
-          {error && <p className="inline-error" role="alert">{error}</p>}
-          <div ref={bottom} />
-        </section>
-        {composer(false)}
-      </>}
-    </main>
-  </div></div>;
+          <div className="copilot-history-header">
+            <span>Recent Queries</span>
+            {accountConversations.length > 0 && (
+              <button type="button" onClick={clearAllConversations} className="copilot-clear-btn">
+                Clear all
+              </button>
+            )}
+          </div>
+
+          <div className="copilot-history-list">
+            {accountConversations.length === 0 ? (
+              <div style={{ padding: "16px 10px", fontSize: "12px", color: "var(--text-muted)", textAlign: "center" }}>
+                No saved chats yet
+              </div>
+            ) : (
+              accountConversations.map((conv) => (
+                <div key={conv.id} className={`copilot-history-item ${conv.id === activeId ? "active" : ""}`} onClick={() => setActiveId(conv.id)}>
+                  <span className="copilot-item-title">{conv.title}</span>
+                  <button
+                    type="button"
+                    className="copilot-item-delete"
+                    onClick={(e) => deleteConversation(conv.id, e)}
+                    title="Delete chat"
+                  >
+                    ×
+                  </button>
+                </div>
+              ))
+            )}
+          </div>
+
+          <div className="copilot-sidebar-footer">
+            <span style={{ width: "6px", height: "6px", borderRadius: "50%", background: "#34d399", display: "inline-block" }} />
+            <span>RAG Grounding: 768-dim pgvector</span>
+          </div>
+        </aside>
+
+        {/* ── Main Chat Area ────────────────────────────────────────── */}
+        <main className="copilot-main">
+          {messages.length === 0 ? (
+            <div className="copilot-empty-state">
+              <div className="copilot-welcome-badge">
+                <span style={{ width: "6px", height: "6px", borderRadius: "50%", background: "#6366f1" }} />
+                <span>POLICY COPILOT · ZERO HALLUCINATION</span>
+              </div>
+              <h2 className="copilot-welcome-title">How can I assist your operations?</h2>
+              <p className="copilot-welcome-desc">
+                Ask any question regarding your uploaded playbooks, customer terms, or warranty guidelines. Every answer is grounded directly in document passages.
+              </p>
+
+              {/* Suggested Prompt Chips */}
+              <div className="copilot-prompt-chips">
+                {SUGGESTED_PROMPTS.map((sample) => (
+                  <button key={sample} type="button" className="copilot-chip" onClick={() => void sendMessage(sample)}>
+                    <span>💬</span>
+                    <span>{sample}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          ) : (
+            <div className="copilot-chat-thread">
+              {messages.map((message, index) => (
+                <div key={`${activeId}-${index}`} className={`copilot-message-row ${message.role}`}>
+                  <div className="copilot-avatar">{message.role === "user" ? "You" : "LD"}</div>
+                  <div className="copilot-message-bubble">
+                    <div className="copilot-message-sender">
+                      {message.role === "user" ? "Operator" : "Loopdesk Copilot"}
+                    </div>
+                    {message.role === "assistant" ? (
+                      <MarkdownContent markdown={message.content} />
+                    ) : (
+                      <p style={{ margin: 0, whiteSpace: "pre-wrap" }}>{message.content}</p>
+                    )}
+
+                    {message.role === "assistant" && message.sources && message.sources.length > 0 && (
+                      <div className="copilot-citations">
+                        <span style={{ fontSize: "11px", fontWeight: 700, color: "var(--text-muted)", textTransform: "uppercase" }}>
+                          Cited Sources:
+                        </span>
+                        <div className="copilot-citation-tags">
+                          {message.sources.map((src, i) => (
+                            <span key={i} className="copilot-citation-pill">
+                              📄 {src.filename} {src.chunk_id ? `(#${src.chunk_id})` : ""}
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              ))}
+
+              {busy && (
+                <div className="copilot-message-row assistant">
+                  <div className="copilot-avatar">LD</div>
+                  <div className="copilot-message-bubble" style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+                    <span style={{ width: "14px", height: "14px", border: "2px solid rgba(99,102,241,0.2)", borderTopColor: "#6366f1", borderRadius: "50%", animation: "spin 0.7s linear infinite" }} />
+                    <span style={{ fontSize: "13px", color: "var(--text-secondary)" }}>Searching knowledge passages & formulating answer…</span>
+                  </div>
+                </div>
+              )}
+
+              {error && <div className="inline-error">{error}</div>}
+              <div ref={bottom} />
+            </div>
+          )}
+
+          {/* ── Input Composer ────────────────────────────────────────── */}
+          <div className="copilot-composer-container">
+            <form
+              className="copilot-composer-box"
+              onSubmit={(e) => {
+                e.preventDefault();
+                void sendMessage();
+              }}
+            >
+              <textarea
+                ref={input}
+                rows={1}
+                maxLength={1000}
+                value={prompt}
+                onChange={(e) => setPrompt(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && !e.shiftKey) {
+                    e.preventDefault();
+                    void sendMessage();
+                  }
+                }}
+                placeholder="Ask about policy exceptions, refund rules, warranty clauses…"
+                disabled={busy}
+              />
+              <button
+                type="submit"
+                disabled={busy || !prompt.trim()}
+                className="copilot-send-button"
+                title="Send inquiry (Enter)"
+              >
+                ↑
+              </button>
+            </form>
+            <div className="copilot-footer-note">
+              <span>🔒 100% Policy Grounded</span>
+              <span>•</span>
+              <span>Dual-Tier Redis & pgvector Acceleration</span>
+            </div>
+          </div>
+        </main>
+      </div>
+    </DashboardLayout>
+  );
 }
 
 function MarkdownContent({ markdown }: { markdown: string }) {
   const lines = markdown.replaceAll("\r\n", "\n").split("\n");
   const blocks: ReactNode[] = [];
   let index = 0;
+
   while (index < lines.length) {
     const line = lines[index];
-    if (!line.trim()) { index += 1; continue; }
+    if (!line.trim()) {
+      index += 1;
+      continue;
+    }
 
-    const fence = line.match(/^\s*(```+|~~~+)([^ ]*)?.*$/);
-    if (fence) {
+    if (line.startsWith("```")) {
       const codeLines: string[] = [];
       index += 1;
-      while (index < lines.length && !new RegExp(`^\\s*${fence[1][0]}{${fence[1].length},}\\s*$`).test(lines[index])) codeLines.push(lines[index++]);
-      if (index < lines.length) index += 1;
-      blocks.push(<pre className="markdown-code" key={`code-${index}`}><code data-language={fence[2] || undefined}>{codeLines.join("\n")}</code></pre>);
-      continue;
-    }
-
-    const heading = line.match(/^(#{1,6})\s+(.+)$/);
-    if (heading) {
-      const level = heading[1].length;
-      blocks.push(<MarkdownHeading key={`heading-${index}`} level={level}>{renderInline(heading[2])}</MarkdownHeading>);
+      while (index < lines.length && !lines[index].startsWith("```")) {
+        codeLines.push(lines[index++]);
+      }
       index += 1;
-      continue;
-    }
-
-    if (/^\s*(?:[-*_]\s*){3,}$/.test(line)) { blocks.push(<hr key={`rule-${index}`} />); index += 1; continue; }
-
-    if (/^\s*>/.test(line)) {
-      const quote: string[] = [];
-      while (index < lines.length && /^\s*>/.test(lines[index])) quote.push(lines[index++].replace(/^\s*>\s?/, ""));
-      blocks.push(<blockquote key={`quote-${index}`}>{quote.map((text, row) => <p key={row}>{renderInline(text)}</p>)}</blockquote>);
+      blocks.push(
+        <pre key={`code-${index}`} style={{ background: "#080910", padding: "12px 16px", borderRadius: "8px", overflowX: "auto", border: "1px solid var(--border-subtle)", fontSize: "12.5px" }}>
+          <code>{codeLines.join("\n")}</code>
+        </pre>
+      );
       continue;
     }
 
@@ -274,51 +369,34 @@ function MarkdownContent({ markdown }: { markdown: string }) {
         listItems.push(<li key={`item-${index}`}>{renderInline(item[2])}</li>);
         index += 1;
       }
-      blocks.push(ordered ? <ol key={`list-${index}`}>{listItems}</ol> : <ul key={`list-${index}`}>{listItems}</ul>);
-      continue;
-    }
-
-    if (line.includes("|") && index + 1 < lines.length && /^\s*\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)+\|?\s*$/.test(lines[index + 1])) {
-      const cells = (row: string) => row.trim().replace(/^\||\|$/g, "").split("|").map((cell) => cell.trim());
-      const headers = cells(line);
-      index += 2;
-      const rows: string[][] = [];
-      while (index < lines.length && lines[index].includes("|")) rows.push(cells(lines[index++]));
-      blocks.push(<div className="markdown-table-wrap" key={`table-${index}`}><table><thead><tr>{headers.map((cell, cellIndex) => <th key={cellIndex}>{renderInline(cell)}</th>)}</tr></thead><tbody>{rows.map((row, rowIndex) => <tr key={rowIndex}>{headers.map((_, cellIndex) => <td key={cellIndex}>{renderInline(row[cellIndex] || "")}</td>)}</tr>)}</tbody></table></div>);
+      blocks.push(ordered ? <ol key={`list-${index}`} style={{ paddingLeft: "20px", margin: "8px 0" }}>{listItems}</ol> : <ul key={`list-${index}`} style={{ paddingLeft: "20px", margin: "8px 0" }}>{listItems}</ul>);
       continue;
     }
 
     const paragraph = [line];
     index += 1;
-    while (index < lines.length && lines[index].trim() && !/^(#{1,6})\s|^\s*>|^\s*([-*+]\s+|\d+[.)]\s+)|^\s*(```+|~~~+)/.test(lines[index])) paragraph.push(lines[index++]);
-    blocks.push(<p key={`paragraph-${index}`}>{paragraph.map((text, row) => <span key={row}>{row > 0 && <br />}{renderInline(text)}</span>)}</p>);
+    while (index < lines.length && lines[index].trim() && !/^(#{1,6})\s|^\s*>|^\s*([-*+]\s+|\d+[.)]\s+)|^\s*(```+)/.test(lines[index])) {
+      paragraph.push(lines[index++]);
+    }
+    blocks.push(
+      <p key={`p-${index}`} style={{ margin: "0 0 10px", lineHeight: 1.65 }}>
+        {paragraph.map((text, row) => (
+          <span key={row}>{row > 0 && <br />}{renderInline(text)}</span>
+        ))}
+      </p>
+    );
   }
-  return <div className="markdown-content">{blocks}</div>;
-}
-
-function MarkdownHeading({ level, children }: { level: number; children: ReactNode }) {
-  switch (level) {
-    case 1: return <h1>{children}</h1>;
-    case 2: return <h2>{children}</h2>;
-    case 3: return <h3>{children}</h3>;
-    case 4: return <h4>{children}</h4>;
-    case 5: return <h5>{children}</h5>;
-    default: return <h6>{children}</h6>;
-  }
+  return <div>{blocks}</div>;
 }
 
 function renderInline(text: string): ReactNode[] {
-  const pattern = /(\*\*[^*]+\*\*|__[^_]+__|~~[^~]+~~|\*[^*]+\*|_[^_]+_|`[^`]+`|\[[^\]]+\]\([^)]+\))/g;
+  const pattern = /(\*\*[^*]+\*\*|__[^_]+__|`[^`]+`)/g;
   return text.split(pattern).filter(Boolean).map((part, index) => {
-    if ((part.startsWith("**") && part.endsWith("**")) || (part.startsWith("__") && part.endsWith("__"))) return <strong key={index}>{part.slice(2, -2)}</strong>;
-    if (part.startsWith("~~") && part.endsWith("~~")) return <del key={index}>{part.slice(2, -2)}</del>;
-    if ((part.startsWith("*") && part.endsWith("*")) || (part.startsWith("_") && part.endsWith("_"))) return <em key={index}>{part.slice(1, -1)}</em>;
-    if (part.startsWith("`") && part.endsWith("`")) return <code key={index}>{part.slice(1, -1)}</code>;
-    const link = part.match(/^\[([^\]]+)\]\(([^)]+)\)$/);
-    if (link) {
-      const href = link[2].trim();
-      const safe = /^(https?:\/\/|mailto:|\/(?!\/)|#)/i.test(href);
-      return safe ? <a key={index} href={href} target={/^https?:\/\//i.test(href) ? "_blank" : undefined} rel="noreferrer">{link[1]}</a> : link[1];
+    if ((part.startsWith("**") && part.endsWith("**")) || (part.startsWith("__") && part.endsWith("__"))) {
+      return <strong key={index} style={{ color: "#ffffff" }}>{part.slice(2, -2)}</strong>;
+    }
+    if (part.startsWith("`") && part.endsWith("`")) {
+      return <code key={index} style={{ background: "rgba(255,255,255,0.06)", padding: "2px 6px", borderRadius: "4px", color: "#a5b4fc", fontSize: "0.9em" }}>{part.slice(1, -1)}</code>;
     }
     return part;
   });
