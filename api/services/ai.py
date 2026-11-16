@@ -23,11 +23,11 @@ class LazyGenAIClient:
 
     def _get(self):
         if self._client is None:
-            api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
+            api_key = (os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY") or "").strip()
             if api_key:
-                self._client = genai.Client(api_key=api_key.strip())
+                self._client = genai.Client(api_key=api_key, http_options={"api_version": "v1beta"})
             else:
-                self._client = genai.Client()
+                self._client = genai.Client(http_options={"api_version": "v1beta"})
         return self._client
 
     @property
@@ -37,6 +37,57 @@ class LazyGenAIClient:
 
 client = LazyGenAIClient()
 text_splitter = RecursiveCharacterTextSplitter(chunk_size=500, chunk_overlap=50)
+
+
+async def generate_embedding(content: str) -> list:
+    """
+    Generates 768-dim vector embedding with automatic model fallback
+    between gemini-embedding-001 and text-embedding-004.
+    """
+    configured_model = os.getenv("EMBEDDING_MODEL") or EMBEDDING_MODEL or "gemini-embedding-001"
+    models_to_try = [configured_model, "gemini-embedding-001", "text-embedding-004"]
+    models_to_try = list(dict.fromkeys(models_to_try))
+    last_err = None
+
+    for model_name in models_to_try:
+        try:
+            result = await asyncio.to_thread(
+                client.models.embed_content,
+                model=model_name,
+                contents=content,
+                config={"output_dimensionality": 768}
+            )
+            return result.embeddings[0].values
+        except Exception as e:
+            last_err = e
+            print(f"[EMBEDDING] Model '{model_name}' failed: {e}. Trying fallback...")
+
+    raise RuntimeError(f"Embedding failed across models: {last_err}")
+
+
+async def generate_embeddings_batch(contents: list[str]) -> list:
+    """
+    Generates batch 768-dim vector embeddings with automatic model fallback.
+    """
+    configured_model = os.getenv("EMBEDDING_MODEL") or EMBEDDING_MODEL or "gemini-embedding-001"
+    models_to_try = [configured_model, "gemini-embedding-001", "text-embedding-004"]
+    models_to_try = list(dict.fromkeys(models_to_try))
+    last_err = None
+
+    for model_name in models_to_try:
+        try:
+            responses = await asyncio.to_thread(
+                client.models.embed_content,
+                model=model_name,
+                contents=contents,
+                config={"output_dimensionality": 768}
+            )
+            return responses.embeddings
+        except Exception as e:
+            last_err = e
+            print(f"[EMBEDDING BATCH] Model '{model_name}' failed: {e}. Trying fallback...")
+
+    raise RuntimeError(f"Embedding batch failed across models: {last_err}")
 
 
 async def generate_workflow_decision(prompt: str) -> dict:

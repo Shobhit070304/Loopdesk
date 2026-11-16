@@ -7,7 +7,7 @@ from pydantic import BaseModel, Field
 import httpx
 from core.config import EMBEDDING_MODEL, LLM_MODEL, GROQ_API_KEY, GROQ_MODEL
 from core.security import workspace_id
-from services.ai import client
+from services.ai import client, generate_embedding
 from services.search import hybrid_search
 from services.cache import cache_key, check_semantic_cache, save_to_cache
 
@@ -85,13 +85,7 @@ async def ask_rag(request: Request, body: AskRequest):
 
     # 2. Embed Query for L2 Semantic Cache & Retrieval
     try:
-        query_embedding = await asyncio.to_thread(
-            client.models.embed_content,
-            model=EMBEDDING_MODEL,
-            contents=query_text,
-            config={"output_dimensionality": 768}
-        )
-        raw_embedding = query_embedding.embeddings[0].values
+        raw_embedding = await generate_embedding(query_text)
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Embedding failed: {str(e)}")
 

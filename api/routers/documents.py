@@ -6,7 +6,7 @@ from fastapi import APIRouter, HTTPException, Request, UploadFile, File
 import pypdf
 from core.config import EMBEDDING_MODEL
 from core.security import workspace_id
-from services.ai import client, text_splitter
+from services.ai import client, text_splitter, generate_embeddings_batch
 from services.cache import invalidate_workspace_cache
 
 router = APIRouter(tags=["Knowledge Base"])
@@ -64,13 +64,8 @@ async def ingest_file(request: Request, file: UploadFile = File(...)):
         all_embeddings = []
         for i in range(0, len(chunks), batch_size):
             chunk_batch = chunks[i : i + batch_size]
-            responses = await asyncio.to_thread(
-                client.models.embed_content,
-                model=EMBEDDING_MODEL,
-                contents=chunk_batch,
-                config={"output_dimensionality": 768}
-            )
-            all_embeddings.extend(responses.embeddings)
+            embeddings_batch = await generate_embeddings_batch(chunk_batch)
+            all_embeddings.extend(embeddings_batch)
 
         records = [
             (chunk, "[" + ",".join(map(str, embedding.values)) + "]")

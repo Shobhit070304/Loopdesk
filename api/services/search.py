@@ -1,5 +1,5 @@
 import asyncio
-from services.ai import client
+from services.ai import client, generate_embedding
 from core.config import EMBEDDING_MODEL
 
 def reciprocal_rank_fusion(vector_results, keyword_results, k: int = 60):
@@ -29,13 +29,7 @@ def reciprocal_rank_fusion(vector_results, keyword_results, k: int = 60):
 async def hybrid_search(app, query: str, top_k: int, workspace: str, raw_embedding: list = None):
     """Shared retrieval logic used by Policy Copilot and Workflow Runner."""
     if raw_embedding is None:
-        result = await asyncio.to_thread(
-            client.models.embed_content,
-            model=EMBEDDING_MODEL,
-            contents=query,
-            config={"output_dimensionality": 768}
-        )
-        raw_embedding = result.embeddings[0].values
+        raw_embedding = await generate_embedding(query)
 
     query_vec_res = "[" + ",".join(map(str, raw_embedding)) + "]"
     async with app.state.pool.acquire() as conn:
