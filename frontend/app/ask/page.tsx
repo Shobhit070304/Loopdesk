@@ -40,8 +40,17 @@ export default function AskPage() {
   const [prompt, setPrompt] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const [copiedIndex, setCopiedIndex] = useState<number | null>(null);
   const input = useRef<HTMLTextAreaElement>(null);
   const bottom = useRef<HTMLDivElement>(null);
+
+  function copyAnswer(text: string, idx: number) {
+    if (typeof navigator !== "undefined" && navigator.clipboard) {
+      navigator.clipboard.writeText(text);
+      setCopiedIndex(idx);
+      setTimeout(() => setCopiedIndex(null), 2000);
+    }
+  }
 
   const accountConversations = historyFor === user?.sub ? conversations : [];
   const activeConversation = accountConversations.find((conversation) => conversation.id === activeId);
@@ -82,7 +91,7 @@ export default function AskPage() {
   }, [conversations, historyFor, historyReady, user?.sub]);
 
   useEffect(() => {
-    bottom.current?.scrollIntoView({ behavior: "smooth" });
+    bottom.current?.scrollIntoView({ behavior: "smooth", block: "nearest" });
   }, [messages, busy]);
 
   function startNewChat() {
@@ -266,6 +275,31 @@ export default function AskPage() {
                             </span>
                           ))}
                         </div>
+                      </div>
+                    )}
+
+                    {message.role === "assistant" && (
+                      <div style={{ marginTop: "10px", display: "flex", justifyContent: "flex-end" }}>
+                        <button
+                          type="button"
+                          onClick={() => copyAnswer(message.content, index)}
+                          style={{
+                            fontSize: "11px",
+                            background: "rgba(255, 255, 255, 0.04)",
+                            border: "1px solid var(--border-subtle)",
+                            borderRadius: "6px",
+                            padding: "3px 8px",
+                            color: copiedIndex === index ? "var(--accent-emerald)" : "var(--text-secondary)",
+                            cursor: "pointer",
+                            display: "inline-flex",
+                            alignItems: "center",
+                            gap: "4px",
+                            transition: "all 0.15s ease",
+                          }}
+                          title="Copy response to clipboard"
+                        >
+                          {copiedIndex === index ? "✓ Copied" : "📋 Copy answer"}
+                        </button>
                       </div>
                     )}
                   </div>

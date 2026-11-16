@@ -68,7 +68,7 @@ export function DemoSignInButton({ onSignedIn }: { onSignedIn?: () => void }) {
 export function AppAccessBoundary({ children }: { children: ReactNode }) {
   const pathname = usePathname();
   const { user, loading, refresh } = useAuth();
-  const isPublic = pathname === "/" || pathname === "/login" || pathname === "/help";
+  const isPublic = pathname === "/" || pathname === "/login" || pathname === "/help" || pathname === "/blogs" || pathname.startsWith("/blogs/");
 
   if (isPublic) return <>{children}</>;
 
@@ -177,16 +177,38 @@ export function DashboardLayout({
 }) {
   const pathname = usePathname();
   const { user } = useAuth();
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+
+  useEffect(() => {
+    setMobileMenuOpen(false);
+  }, [pathname]);
 
   return (
     <div className="dashboard-root">
+      {/* ── Mobile Backdrop ───────────────────────────────────────────── */}
+      {mobileMenuOpen && (
+        <div
+          className="mobile-sidebar-backdrop"
+          onClick={() => setMobileMenuOpen(false)}
+          aria-hidden="true"
+        />
+      )}
+
       {/* ── Persistent Dark Sidebar ───────────────────────────────────── */}
-      <aside className="dashboard-sidebar">
+      <aside className={`dashboard-sidebar ${mobileMenuOpen ? "mobile-open" : ""}`}>
         <div className="sidebar-header">
           <Link href="/" className="brand">
             <BrandMark size={28} />
             <span>Loop<span className="brand-light">desk</span></span>
           </Link>
+          <button
+            type="button"
+            className="mobile-sidebar-close"
+            onClick={() => setMobileMenuOpen(false)}
+            aria-label="Close navigation"
+          >
+            ✕
+          </button>
         </div>
 
         <nav className="sidebar-nav" aria-label="Dashboard Navigation">
@@ -197,6 +219,7 @@ export function DashboardLayout({
               <Link
                 key={item.href}
                 href={item.href}
+                onClick={() => setMobileMenuOpen(false)}
                 className={`sidebar-nav-item ${isActive ? "active" : ""}`}
               >
                 <span className="sidebar-nav-icon">{item.icon}</span>
@@ -211,7 +234,7 @@ export function DashboardLayout({
 
         {/* User Footer with Profile Link & Sign Out */}
         <div className="sidebar-footer">
-          <Link href="/profile" className="sidebar-user" title="Open Account Settings">
+          <Link href="/profile" className="sidebar-user" title="Open Account Settings" onClick={() => setMobileMenuOpen(false)}>
             {user?.picture ? (
               <img
                 src={user.picture}
@@ -241,6 +264,14 @@ export function DashboardLayout({
       <div className="dashboard-main">
         <header className="dashboard-topbar">
           <div className="dashboard-breadcrumbs">
+            <button
+              type="button"
+              className="mobile-hamburger-btn"
+              onClick={() => setMobileMenuOpen((open) => !open)}
+              aria-label="Toggle navigation"
+            >
+              ☰
+            </button>
             <Link href="/dashboard">Workspace</Link>
             <span>/</span>
             <span className="active" style={{ textTransform: "capitalize" }}>

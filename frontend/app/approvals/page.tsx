@@ -283,6 +283,11 @@ export default function ApprovalsPage() {
             {shown.map((item) => {
               const runCategory = category(item.status, item.decision_output?.decision);
               const isSelected = selectedId === item.id;
+              const customerEmail =
+                item.decision_output?.action_payload?.recipient ||
+                (item.trigger_payload?.metadata as any)?.customer_email ||
+                (item.trigger_payload?.metadata as any)?.email ||
+                (item.trigger_payload as any)?.customer_email;
 
               return (
                 <div
@@ -296,6 +301,26 @@ export default function ApprovalsPage() {
                     {item.trigger_payload?.event_text || "No details provided in event payload."}
                   </span>
                   <div className="compact-essentials">
+                    {customerEmail && (
+                      <span
+                        style={{
+                          fontSize: "11px",
+                          color: "var(--accent-cyan)",
+                          background: "rgba(56, 189, 248, 0.08)",
+                          border: "1px solid rgba(56, 189, 248, 0.2)",
+                          borderRadius: "6px",
+                          padding: "2px 7px",
+                          fontFamily: "var(--font-mono)",
+                          maxWidth: "160px",
+                          overflow: "hidden",
+                          textOverflow: "ellipsis",
+                          whiteSpace: "nowrap",
+                        }}
+                        title={customerEmail}
+                      >
+                        ✉ {customerEmail}
+                      </span>
+                    )}
                     <span className="compact-workflow-name">{item.workflow_name}</span>
                     <span className={`compact-status-badge ${runCategory}`}>
                       {runCategory === "pending"

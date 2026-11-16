@@ -24,6 +24,9 @@ export default function DocumentsPage() {
   const [loadingDocuments, setLoadingDocuments] = useState(true);
   const [removingId, setRemovingId] = useState<string | null>(null);
   const [searchTerm, setSearchTerm] = useState("");
+  const [viewingDoc, setViewingDoc] = useState<KnowledgeDocument | null>(null);
+  const [docChunks, setDocChunks] = useState<Array<{ id: number; content: string; created_at?: string }>>([]);
+  const [loadingChunks, setLoadingChunks] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const nonLegacyDocs = documents.filter((item) => item.id !== "legacy");
@@ -96,11 +99,28 @@ export default function DocumentsPage() {
       const response = await fetch(`/api/backend/documents/${encodeURIComponent(document.id)}`, { method: "DELETE" });
       const data = await response.json();
       if (!response.ok) throw new Error(formatDetail(data.detail, "The document could not be removed."));
+      if (viewingDoc?.id === document.id) setViewingDoc(null);
       await loadDocuments();
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "The document could not be removed.");
     } finally {
       setRemovingId(null);
+    }
+  }
+
+  async function openPassages(doc: KnowledgeDocument) {
+    setViewingDoc(doc);
+    setLoadingChunks(true);
+    setDocChunks([]);
+    try {
+      const response = await fetch(`/api/backend/documents/${encodeURIComponent(doc.id)}/chunks`);
+      const data = await response.json();
+      if (!response.ok) throw new Error(formatDetail(data.detail, "Could not fetch document passages."));
+      setDocChunks(data.chunks || []);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "Could not fetch passages.");
+    } finally {
+      setLoadingChunks(false);
     }
   }
 
@@ -193,14 +213,118 @@ export default function DocumentsPage() {
                 <strong>{document.filename}</strong>
                 <small>{document.chunk_count} searchable sections{document.size_bytes ? ` · ${(document.size_bytes / 1024).toFixed(0)} KB` : ""}{document.created_at ? ` · Added ${new Date(document.created_at).toLocaleDateString()}` : ""}</small>
               </div>
-              <button className="document-remove" disabled={removingId === document.id} onClick={() => void removeDocument(document)} aria-label={`Remove ${document.filename}`}>
-                {removingId === document.id ? "Removing…" : "Remove"}
-              </button>
+              <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
+                <button
+                  type="button"
+                  className="button-secondary"
+                  style={{ padding: "6px 12px", fontSize: "12px", borderRadius: "8px" }}
+                  onClick={() => void openPassages(document)}
+                >
+                  View Passages
+                </button>
+                <button className="document-remove" disabled={removingId === document.id} onClick={() => void removeDocument(document)} aria-label={`Remove ${document.filename}`}>
+                  {removingId === document.id ? "Removing…" : "Remove"}
+                </button>
+              </div>
             </article>
           ))}
         </div>
       )}
     </section>
+
+    {/* ── Slide-over Passages Drawer ── */}
+    {viewingDoc && (
+      <div
+        style={{
+          position: "fixed",
+          inset: 0,
+          background: "rgba(0, 0, 0, 0.65)",
+          backdropFilter: "blur(4px)",
+          zIndex: 999,
+          display: "flex",
+          justifyContent: "flex-end",
+        }}
+        onClick={() => setViewingDoc(null)}
+      >
+        <div
+          style={{
+            width: "100%",
+            maxWidth: "560px",
+            height: "100%",
+            background: "var(--bg-card)",
+            borderLeft: "1px solid var(--border-card)",
+            display: "flex",
+            flexDirection: "column",
+            boxShadow: "-8px 0 32px rgba(0, 0, 0, 0.4)",
+          }}
+          onClick={(e) => e.stopPropagation()}
+        >
+          <div style={{ padding: "20px 24px", borderBottom: "1px solid var(--border-card)", display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
+            <div>
+              <p className="eyebrow" style={{ marginBottom: "4px" }}>INDEXED VECTOR CHUNKS</p>
+              <h3 style={{ margin: 0, fontSize: "16px", color: "var(--text-primary)" }}>{viewingDoc.filename}</h3>
+              <p style={{ margin: "4px 0 0", fontSize: "12px", color: "var(--text-muted)" }}>
+                {viewingDoc.chunk_count} passages stored in PostgreSQL pgvector (768-dim)
+              </p>
+            </div>
+            <button
+              type="button"
+              className="button-secondary"
+              style={{ padding: "4px 10px", fontSize: "12px" }}
+              onClick={() => setViewingDoc(null)}
+            >
+              ✕ Close
+            </button>
+          </div>
+
+          <div style={{ flex: 1, overflowY: "auto", padding: "20px 24px", display: "flex", flexDirection: "column", gap: "16px" }}>
+            {loadingChunks ? (
+              <div style={{ textAlign: "center", padding: "40px 0", color: "var(--text-muted)", fontSize: "13px" }}>
+                <span className="spinner" style={{ marginRight: "8px" }} /> Loading vector passages…
+              </div>
+            ) : docChunks.length === 0 ? (
+              <div style={{ textAlign: "center", padding: "40px 0", color: "var(--text-muted)", fontSize: "13px" }}>
+                No passages indexed for this document.
+              </div>
+            ) : (
+              docChunks.map((chunk, idx) => (
+                <div
+                  key={chunk.id}
+                  style={{
+                    background: "rgba(255, 255, 255, 0.02)",
+                    border: "1px solid var(--border-subtle)",
+                    borderRadius: "10px",
+                    padding: "16px",
+                  }}
+                >
+                  <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "8px" }}>
+                    <span style={{ fontSize: "11px", fontWeight: 600, color: "var(--accent-cyan)", fontFamily: "var(--font-mono)" }}>
+                      PASSAGE #{idx + 1} · ID {chunk.id}
+                    </span>
+                    <span style={{ fontSize: "11px", color: "var(--text-muted)" }}>
+                      {chunk.content.length} chars
+                    </span>
+                  </div>
+                  <pre
+                    style={{
+                      whiteSpace: "pre-wrap",
+                      wordBreak: "break-word",
+                      fontSize: "12.5px",
+                      color: "var(--text-secondary)",
+                      margin: 0,
+                      lineHeight: "1.6",
+                      fontFamily: "inherit",
+                    }}
+                  >
+                    {chunk.content}
+                  </pre>
+                </div>
+              ))
+            )}
+          </div>
+        </div>
+      </div>
+    )}
     </DashboardLayout>
   );
 }

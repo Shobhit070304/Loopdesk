@@ -1,136 +1,186 @@
 # Loopdesk
 
-Loopdesk is an agent-facing customer support copilot. It grounds answers and workflow decisions in a support team's own knowledge, accepts customer events through inbound webhooks, and keeps a human review step available for workflows that need one.
+Loopdesk is an autonomous customer support copilot engineered for support teams and platform operators. It grounds every automated reply in verified company policy documents, accelerates repeated inquiries through sub-50ms dual-tier caching (Redis L1 + pgvector L2), and keeps operators in complete control with an inline human review queue.
 
-The initial product scope is a support-team workspace, not a customer-facing chatbot or a replacement for a ticketing system. A workflow can run **manually** (every event waits in the review queue) or **automatically** (every event follows the workflow's configured action). The mode belongs to the workflow; callers do not choose it for each customer event.
+Created and authored by **Shobhit Sharma**.
 
-## Current capabilities
+---
 
-- Google Identity Services sign-in. FastAPI verifies the Google ID token and issues a signed session used by the Next.js server-side API proxy.
-- Account-scoped PDF, TXT, Markdown, CSV and JSON uploads. Text is chunked, embedded, searchable, listable and removable.
-- Grounded assistant answers using hybrid vector and keyword retrieval, with source names in the answer.
-- Account-scoped semantic answer caching. Uploading or removing knowledge invalidates that account's cache.
-- Workflow creation, webhook credentials, inbound event normalization, test events, workflow-wide manual/automatic mode, action dispatch and a customer review queue.
-- Browser-local Ask history. It stays in local storage on the signed-in browser and is not sent to the server.
+## Capabilities & Architecture
 
-Slack and email workflow types currently use the generic outbound webhook contract; they are not native Slack or email integrations. A support platform can send events to an inbound webhook and receive an action payload at the configured HTTPS destination. Native ticket-system authentication and reply APIs require a provider-specific connector.
+- **Grounding & Hybrid Search**: Documents (PDF, TXT, Markdown, CSV, JSON) are chunked via recursive character splitting and vectorized into 768-dimensional embeddings using `text-embedding-004`. Retrieval combines PostgreSQL full-text search (GIN index) and vector cosine similarity (HNSW index) via Reciprocal Rank Fusion (RRF).
+- **Dual-Tier Acceleration & Semantic Cache**:
+  - **L1 Cache (Redis)**: Sub-10ms exact-match query hash cache.
+  - **L2 Cache (PostgreSQL pgvector)**: Sub-50ms cosine similarity semantic cache (\(\ge 0.96\) similarity threshold).
+  - Cache is workspace-isolated and auto-invalidated whenever policy documents are uploaded or removed.
+- **Workflow Automation & Execution Modes**:
+  - **Manual Mode**: Every event enters the Human Review Queue where operators can inspect AI reasoning, edit reply text, and approve/reject before email dispatch.
+  - **Automatic Mode**: High-confidence decisions execute instantly via webhook/email dispatch.
+- **Resilient AI Pipeline**: Primary reasoning is executed using Google Gemini (`gemini-2.5-flash`), backed by automatic fallback to Groq (`llama-3.3-70b-versatile`) if rate limits or network errors occur.
+- **Execution Trace & Sandbox Simulator**: Built-in 4-stage dry-run debugger (`/workflows/{id}/simulate`) that traces Intake, Retrieval, Reasoning, and Dispatch latencies without triggering live outbound calls.
+- **Multi-Tenant Workspace Security**: Google OAuth ID token verification with HMAC-SHA256 signed session cookies, SSRF destination protection, and atomic database state transitions.
 
-## Architecture
+---
+
+## System Architecture
 
 ```text
-Next.js frontend (Vercel or Node host)
-  ├─ Google sign-in and HTTP-only signed session
-  ├─ authenticated API proxy ─────────── FastAPI backend
-  └─ public inbound webhook proxy ───────┘
-                                           ├─ PostgreSQL + pgvector
-                                           ├─ Redis
-                                           └─ Google Gemini API
+Next.js 16 (App Router + Tailwind CSS)
+  ├─ Google Identity Services (Client-side token exchange)
+  ├─ HTTP-only Signed Session Cookies
+  ├─ Authenticated Backend Proxy (/api/backend/*) ─── FastAPI (Python 3.11+)
+  └─ Inbound Webhook Forwarding ───────────────────────┘
+                                                        ├─ Core (config, database, security)
+                                                        ├─ Services (ai, search, cache)
+                                                        ├─ Routers (auth, docs, workflows, executions, ask, webhooks, analytics)
+                                                        ├─ PostgreSQL + pgvector (768-dim HNSW + GIN FTS)
+                                                        ├─ Redis (Docker / Upstash)
+                                                        └─ Google Gemini / Groq LLMs
 ```
 
-The backend derives the workspace key from the signed Google subject. Documents, retrieval, workflow records, executions and cache entries are scoped to that key. This release provides one private workspace per Google account; shared team memberships and organization administration are a later product capability.
+---
 
-## Local development
+## Local Development Quickstart
 
-Requirements: Node.js 20+, Python 3.11+, PostgreSQL with pgvector, Redis, and a Gemini API key.
+### Prerequisites
+- Node.js 20+
+- Python 3.11+
+- Docker (for local Redis)
+- PostgreSQL with `pgvector` enabled (local or managed e.g. Neon, Supabase)
 
-1. Start Redis using Docker (`docker compose up -d redis`), or connect to a managed service like Upstash. Connect PostgreSQL with the pgvector extension (e.g. Neon, Supabase, or local Postgres).
-2. Create `api/.env` from `api/.env.example`. Configure `DB_URL`, `REDIS_URL`, `GEMINI_API_KEY`, `AUTH_GOOGLE_ID`, and a random `AUTH_SECRET` of at least 32 characters.
-3. Install and start FastAPI:
+### 1. Redis
+Start Redis in Docker:
+```bash
+docker run -d --name loopdesk-redis -p 6379:6379 redis:7-alpine
+```
 
-   ```powershell
-   cd api
-   python -m venv .venv
-   .venv\Scripts\Activate.ps1
-   pip install -r requirements.txt
-   uvicorn main:app --reload --port 8000
-   ```
+### 2. Backend (FastAPI)
+```bash
+cd api
+python -m venv .venv
+# On Windows PowerShell:
+.venv\Scripts\Activate.ps1
+# On macOS / Linux:
+# source .venv/bin/activate
 
-4. Create `frontend/.env.local` from `frontend/.env.example`. Set `BACKEND_URL`, `NEXT_PUBLIC_AUTH_GOOGLE_ID`, and the exact same `AUTH_SECRET` used by the API.
-5. In Google Cloud, configure a Web OAuth client and add the local frontend origin (`http://localhost:3000`) to its authorized JavaScript origins.
-6. Install and start Next.js:
+pip install -r requirements.txt
+cp .env.example .env
+# Edit .env with your DB_URL, GEMINI_API_KEY, AUTH_SECRET, etc.
 
-   ```powershell
-   cd frontend
-   npm install
-   npm run dev
-   ```
+uvicorn main:app --reload --port 8000
+```
 
-The backend applies the base schema and the versioned SQL migration at startup. `/health` is a liveness check. `/ready` checks PostgreSQL, Redis and Gemini configuration and is suitable for a deployment readiness probe.
+### 3. Frontend (Next.js)
+```bash
+cd frontend
+npm install
+cp .env.example .env.local
+# Edit .env.local with matching AUTH_SECRET, BACKEND_URL=http://localhost:8000, etc.
 
-## Environment variables
+npm run dev
+```
+Open [http://localhost:3000](http://localhost:3000) in your browser.
 
-### FastAPI (`api/.env`)
+---
 
-| Variable | Purpose |
+## Environment Variables
+
+### Backend (`api/.env`)
+| Variable | Description |
 |---|---|
-| `DB_URL` | PostgreSQL connection string with pgvector available |
-| `REDIS_URL` | Redis connection string |
-| `GEMINI_API_KEY` | Gemini API key |
-| `AUTH_GOOGLE_ID` | Google web client ID used to verify ID tokens |
-| `AUTH_SECRET` | Random session signing secret; must match the frontend value and be at least 32 characters |
-| `CORS_ORIGINS` | Comma-separated allowed frontend origins |
-| `ENVIRONMENT` | Set to `production` to require HTTPS for outbound actions |
-| `WEBHOOK_RATE_LIMIT_PER_MINUTE` | Optional per-workflow inbound event limit (default `50`) |
-| `EMBEDDING_MODEL` | Optional embedding model override (default `text-embedding-004`) |
-| `LLM_MODEL` | Optional generation model override (default `gemini-2.5-flash`) |
+| `DB_URL` | PostgreSQL connection URL with `pgvector` enabled |
+| `REDIS_URL` | Redis URL (default: `redis://localhost:6379`) |
+| `GEMINI_API_KEY` | Google AI Studio API key |
+| `EMBEDDING_MODEL` | Default: `text-embedding-004` |
+| `LLM_MODEL` | Default: `gemini-2.5-flash` |
+| `GROQ_API_KEY` | Optional fallback Groq API key |
+| `GROQ_MODEL` | Default: `llama-3.3-70b-versatile` |
+| `AUTH_GOOGLE_ID` | Google OAuth Client ID |
+| `AUTH_SECRET` | 32+ character HMAC session signing secret |
+| `CORS_ORIGINS` | Allowed frontend origins (e.g. `http://localhost:3000`) |
+| `ENVIRONMENT` | `development` or `production` (enforces HTTPS on webhooks) |
 
-### Next.js (`frontend/.env.local`)
-
-| Variable | Purpose |
+### Frontend (`frontend/.env.local`)
+| Variable | Description |
 |---|---|
-| `BACKEND_URL` | Private URL of the FastAPI service |
-| `NEXT_PUBLIC_AUTH_GOOGLE_ID` | Same Google web client ID as the API |
-| `AUTH_SECRET` | Same random session signing secret as the API |
+| `BACKEND_URL` | Internal FastAPI service address (`http://localhost:8000`) |
+| `NEXT_PUBLIC_AUTH_GOOGLE_ID` | Same Google OAuth Client ID |
+| `AUTH_SECRET` | Same 32+ character HMAC session signing secret |
 
-## Client & payload limits
+---
 
-- **File ingestion**: 15 MB maximum upload size per file (`/ingest/file`). Maximum **5 documents** per account for all time (portfolio demo tier).
-- **AI Questions**: **50 questions a day** per account (`/ask`), with a 10 requests/minute speed throttle. Maximum 1,000 characters per prompt.
-- **Workflow Events**: **50 customer events a day** combined across all workflows for an account (`/api/webhooks/{token}`, `/workflows/{id}/trigger`, `/workflows/{id}/webhook/test`). Maximum 1 MB payload, 10,000 characters event text.
-- **Workflow creation**: Maximum **10 workflows** per account. Name (2–100 chars), description (max 255 chars), instructions prompt (max 10,000 chars).
-- **Next.js API proxy**: 20 MB maximum request body on backend proxy routes.
-- **Inbound webhooks**: Requires non-empty valid JSON payload (`{}` or empty collections rejected with 422). Rate limited to 50 requests/min per workflow. Optional HMAC signature or secret verification.
+## API Reference
 
-## Deployment checklist
+All protected endpoints require an authenticated signed session token via the Next.js API proxy (`/api/backend/*`).
 
-1. Provision managed PostgreSQL with pgvector and managed Redis; take a database backup before the first migration.
-2. Deploy the FastAPI service using Uvicorn (e.g. on Render, Railway, AWS, or a virtual host). Set the API environment variables above. Set `ENVIRONMENT=production`, use HTTPS, configure `CORS_ORIGINS`, and expose `/health` and `/ready` as liveness/readiness probes.
-3. Deploy `frontend/` to Vercel or a Node host. Set `BACKEND_URL`, `NEXT_PUBLIC_AUTH_GOOGLE_ID`, and `AUTH_SECRET` in that environment. Keep `BACKEND_URL` private where the host supports private service networking.
-4. Add the production frontend origin to Google OAuth authorized JavaScript origins. Use the same OAuth client ID and exact same session secret across frontend and API.
-5. Send a test login, document upload, grounded Ask query, manual workflow event, approval, automatic workflow event, and action failure through staging before directing customer traffic.
-6. Monitor API error rates, readiness, model failures, action dispatch failures and webhook throttling. Keep customer payloads and credentials out of application logs.
-
-## API routes
-
-All routes except `/health`, `/ready`, Google verification, framework docs, and tokenized inbound webhooks require a signed session through the frontend proxy.
-
-| Method | Route | Purpose |
+| Method | Endpoint | Description |
 |---|---|---|
-| `POST` | `/auth/google/verify` | Verify ID token, create/update account and issue signed session |
-| `POST` | `/ingest/file` | Upload and index a supported knowledge file (15 MB maximum) |
-| `GET` | `/documents` | List files in the current account workspace |
-| `DELETE` | `/documents/{id}` | Remove an uploaded file and its indexed chunks |
-| `POST` | `/ask` | Retrieve grounded support knowledge and answer a question (1,000 char max) |
-| `POST` / `GET` | `/workflows` | Create/list workflows in the current account workspace |
-| `PATCH` | `/workflows/{id}/execution-mode` | Change a workflow-wide `manual` or `automatic` mode |
-| `POST` | `/api/webhooks/{token}` | Accept a customer event, evaluate the workflow and record the run |
-| `GET` | `/workflow-executions` | List recent workflow activity for the current workspace |
-| `POST` | `/workflows/executions/{id}/approve` | Approve a pending run, optionally update response text, and dispatch action |
-| `POST` | `/workflows/executions/{id}/reject` | Reject a pending run |
-| `POST` | `/workflows/executions/{id}/retry` | Retry dispatching an action for a failed execution |
-| `POST` | `/workflows/{id}/webhook/test` | Trigger a test event against a workflow |
+| `GET` | `/health` / `/ready` | Liveness and readiness probes |
+| `POST` | `/auth/google/verify` | Verify Google ID token and return signed session token |
+| `POST` | `/ingest/file` | Upload and chunk knowledge document (PDF, TXT, MD, CSV, JSON) |
+| `GET` | `/documents` | List knowledge documents in active workspace |
+| `GET` | `/documents/{id}/chunks` | Preview vectorized passages and chunk IDs for a document |
+| `DELETE` | `/documents/{id}` | Delete document, vector chunks, and invalidate workspace cache |
+| `POST` | `/ask` | Ask Policy Copilot (Dual-tier cache accelerated) |
+| `GET` / `POST` | `/workflows` | List or create workflows |
+| `GET` / `PATCH` / `DELETE` | `/workflows/{id}` | Retrieve, update, or remove workflow |
+| `POST` | `/workflows/{id}/simulate` | 4-Stage execution trace & dry-run debugger |
+| `POST` | `/workflows/{id}/webhook/test` | Trigger a test inquiry against workflow |
+| `POST` | `/workflows/{id}/webhook/regenerate` | Rotate webhook token and secret |
+| `POST` | `/workflows/{id}/webhook/toggle` | Enable or disable inbound webhook endpoint |
+| `POST` | `/api/webhooks/{token}` | Public inbound webhook intake (Rate-limited, HMAC verified) |
+| `GET` | `/workflow-executions` | List execution history and pending reviews |
+| `POST` | `/workflows/executions/{id}/approve` | Approve review item, optionally edit message, and dispatch |
+| `POST` | `/workflows/executions/{id}/reject` | Reject pending workflow execution |
+| `POST` | `/workflows/executions/{id}/retry` | Retry action dispatch for failed executions |
+| `GET` | `/analytics` | Real-time cache hit rates, p95 latencies, and token economics |
 
-Inbound events accept common message fields (`event_text`, `text`, `message`, `description`, `customer_message`, `query`) and ticket-like payloads with `ticket.subject` / `ticket.description`. Include a stable `event_id` or `Idempotency-Key` so retries do not dispatch duplicate actions. The high-entropy webhook URL token is a bearer credential; optional HMAC or secret headers provide an additional check.
+---
 
-Outbound actions require a public destination. Local/private IPs and local hostnames are rejected, DNS results are checked before dispatch, production destinations must use HTTPS, redirects are not followed, and non-success HTTP responses are recorded as failures. Network-level egress controls are still recommended in production.
-
-## Project layout
+## Codebase Structure
 
 ```text
-api/
-  main.py
-  migrations/001_customer_workspace.sql
-frontend/
-  app/                 # Next.js App Router pages and API routes
-  lib/auth.ts          # Signed session verification for Next.js
+Loopdesk/
+├── api/
+│   ├── core/
+│   │   ├── config.py         # Centralized configuration & environment validation
+│   │   ├── database.py       # Asyncpg connection pooling, migrations & seeders
+│   │   └── security.py       # HMAC session signing, Google OAuth & SSRF guards
+│   ├── services/
+│   │   ├── ai.py             # Lazy GenAI client, Gemini reasoning & Groq fallback
+│   │   ├── cache.py          # L1 Redis + L2 pgvector semantic cache invalidation
+│   │   └── search.py         # Hybrid search & Reciprocal Rank Fusion (RRF)
+│   ├── routers/
+│   │   ├── analytics.py      # Telemetry & cost-savings metrics
+│   │   ├── ask.py            # Grounded Policy Copilot endpoint
+│   │   ├── auth.py           # Google authentication, /health & /ready
+│   │   ├── documents.py      # File ingestion, chunk listing & deletion
+│   │   ├── executions.py     # Review queue triage, approvals & retries
+│   │   ├── webhooks.py       # Public inbound webhook ingestion & verification
+│   │   └── workflows.py      # Workflow management, simulation & action dispatch
+│   ├── migrations/           # SQL migration scripts
+│   ├── main.py               # Clean FastAPI app orchestrator & route mounting
+│   └── requirements.txt      # Production Python dependencies
+├── frontend/
+│   ├── app/
+│   │   ├── analytics/        # Analytics & telemetry dashboard
+│   │   ├── approvals/        # Human-in-the-loop customer review queue
+│   │   ├── ask/              # Policy Copilot chat interface
+│   │   ├── blogs/            # Technical blog & documentation
+│   │   ├── documents/        # Knowledge Base upload & passage preview drawer
+│   │   ├── login/            # Authentication & demo mode portal
+│   │   ├── workflows/        # Visual workflow builder & dry-run debugger
+│   │   ├── components.tsx    # Shared UI: Navbar, Sidebar, Access Boundary
+│   │   ├── globals.css       # Clean design tokens & minimal base styles
+│   │   └── page.tsx          # High-converting dark SaaS landing page
+│   ├── lib/
+│   │   └── auth.ts           # HMAC session cookie parser & verifier
+│   └── package.json          # Next.js 16 dependencies
+└── docker-compose.yml        # Docker compose configuration for Redis
 ```
+
+---
+
+## License & Credits
+
+Built with precision by **Shobhit Sharma**. Released under the MIT License.
